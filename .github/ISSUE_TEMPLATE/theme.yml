@@ -1,0 +1,34 @@
+name: Share a theme
+description: Upload a theme pack (and a screenshot) for ISO Package Manager
+title: "Theme: "
+labels: ["theme"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Easiest way: open the [theme gallery](https://anviktor2411.github.io/iso-package-manager/#upload), add your `.ipmtheme.json` or `.ipmtheme.zip`, and press **Continue on GitHub**. The pack below is filled in for you.
+        When a maintainer approves the issue, a bot validates the pack with `tools/ipmtheme.py validate --strict` and adds it to the gallery.
+  - type: textarea
+    id: theme
+    attributes:
+      label: Theme pack JSON
+      description: The contents of your .ipmtheme.json file.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshot
+      description: Drag one PNG or JPG screenshot of the app using your theme here. Optional but recommended.
+    validations:
+      required: false
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: I have the right to share this palette and screenshot under the license named in the pack, and I credited any palette I based it on.
+          required: true
+        - label: The screenshot shows no personal information.
+          required: true
