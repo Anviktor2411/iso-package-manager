@@ -24,15 +24,34 @@ Use the **Web Search** box to find direct `.iso` URLs.
 
 Pick **Category: Windows** to list Microsoft Windows install media.
 
-- Available sources: `Windows 11`, `Windows 10`, `Windows 8.1`, `Windows 8`, `Windows 7`, `Windows Vista`, `Windows XP`, and `Windows (all versions)`.
+- Available sources: `Windows 11`, `Windows 11 Enterprise LTSC`, `Windows 11 IoT Enterprise LTSC`, `Windows 10`, `Windows 10 Enterprise LTSC`, `Windows 10 IoT Enterprise LTSC`, `Windows 8.1`, `Windows 8`, `Windows 7`, `Windows Vista`, `Windows XP`, and `Windows (all versions)`.
+- The LTSC (long-term servicing channel) editions are separate sources. A free-text search such as `windows 11 ltsc`, `win 11 ltsc` or just `ltsc` also reaches them, and `ltsc`/`ltsb` on its own lists every LTSC edition.
 - Data comes from the Internet Archive catalogues (`mediatype:software` + `format:"ISO Image"`), because Microsoft no longer offers scriptable direct-ISO links for 10/11 and has retired 8.1/8/7/Vista/XP.
-- Each row shows `[Win X] filename.iso [size]`, and the file size is included in the name so tiny repacks are easy to spot.
+- Each row shows `[Win X] filename.iso [size]`, and the file size is included in the name so tiny repacks are easy to spot. LTSC rows are tagged `[Win 11 LTSC]`, `[Win 11 IoT LTSC]`, `[Win 10 LTSC]` or `[Win 10 IoT LTSC]`.
 - Filtering removes cracked/activated, "lite"/"nano"/"tiny edition" and other repacks, drops files under 300 MB, and drops results that do not mention the requested release (so XP discs don't appear under Windows 8).
+- LTSC media is matched through the archive item's title, because Microsoft's LTSC file names never contain the word "LTSC" (for example `X23-81951_26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_ENTERPRISES_OEM_x64FRE_en-us.iso`). Language-pack ISOs stored in the same items (`CLIENT_LOF_PACKAGES_OEM.iso`) are excluded.
+- Retail `Windows 11` / `Windows 10` results deliberately leave LTSC and other enterprise images out: an LTSC build is reported under its own source instead.
 - **Load more** raises the number of scanned archive entries per release, so more (and older) builds appear.
-- **Open Source Page**: Microsoft's official page for 10/11, the Windows 8 hub for 8/8.1, and Internet Archive search for 7/Vista/XP.
+- **Open Source Page**: Microsoft's official page for 10/11 (retail), the Windows 8 hub for 8/8.1, and Internet Archive search for 7/Vista/XP and all four LTSC editions (LTSC is not on Microsoft's consumer download pages).
 - Typing `windows 7 iso` (and similar) in **Web Search** also pulls in these catalogues.
 
 The archive copies are community uploads: hashes are not published by Microsoft through this source, so verify a download against Microsoft's official SHA-256 list, and keep in mind that installation still needs a valid licence key.
+
+### Microsoft Windows Server
+
+Pick **Category: Windows Server** to list Windows Server install media, or reach the same releases through **Category: Windows** / **All**.
+
+- Available sources: `Windows Server 2025`, `Windows Server 2022`, `Windows Server 2019`, `Windows Server 2016`, `Windows Server 2012 R2`, `Windows Server 2012`, `Windows Server 2008 R2`, and `Windows Server (all versions)` — listed newest first, with `2012 R2` before `2012`.
+- A bare `windows server`, `win server` or `windows srv` query names the product line but no version, and expands to every Server release.
+- Rows are tagged `[Srv 2025]`, `[Srv 2022]`, `[Srv 2019]`, `[Srv 2016]`, `[Srv 2012 R2]`, `[Srv 2012]` or `[Srv 2008 R2]`, and follow the same `[tag] filename.iso [size]` format as the client sources.
+- Current releases (2016 and newer) are served by Microsoft's Evaluation Center media and the Internet Archive; retired releases (2012 R2 and older, back to 2008 R2) only exist as community archive copies, so 2008 R2 typically returns evaluation kits such as `7601.17514.101119-1850_x64fre_server_en-us_VL-GRMSXVOL_EN_DVD.iso` rather than retail discs.
+- Filtering is the client filter set plus two Server-specific guards:
+  - Desktop client media is kept out of Server lists, so a Windows 7 disc sharing a catalogue item with a 2008 R2 disc cannot leak into the `Windows Server 2008 R2` results.
+  - Non-OS server products are excluded: `SQL Server` / `MSSQL`, `Exchange Server`, `SharePoint`, `Lync Server`, `System Center`, `BizTalk` and `MultiPoint Server`. `Hyper-V Server` is deliberately kept, because it is a Windows Server install image.
+- `Windows Server 2012` and `Windows Server 2012 R2` share the base title `Windows Server 2012`, so R2 media is reported under `Windows Server 2012 R2` and filtered out of the plain `Windows Server 2012` list.
+- A few archive items use volume-licence names that never spell out the release, e.g. `HRM_SSS_X64FRE_EN-US_DV5.iso` (Server 2012 R2). These are resolved by filename hints, so the release still resolves correctly instead of showing up under the wrong Server version.
+- **Open Source Page** goes to Microsoft's Evaluation Center for current releases and to the Internet Archive search for retired ones.
+- Server images are useful for labs, training and testing. Install only where you are licensed and authorised, and verify the SHA-256 against Microsoft's published hash list before use.
 
 ### Deterministic-first (recommended)
 

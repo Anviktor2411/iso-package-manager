@@ -1041,8 +1041,8 @@ def ia_iso_search(
     ``query`` may be a UI source name ("OpenBSD"), a free-text query
     ("haiku iso") or the generic label "Archive.org (any ISO)".  ``archive_level``
     (the UI's "Load more" depth) widens how many catalogue items per family are
-    read.  Windows 11/10/8.1/8/7/Vista/XP are intentionally not handled here -
-    see ``ipm_windows``.
+    read.  Windows 11/10/8.1/8/7/Vista/XP and the Windows 11/10 LTSC editions are
+    intentionally not handled here - see ``ipm_windows``.
     """
     try:
         targets = resolve_ia_targets(query)

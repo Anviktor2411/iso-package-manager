@@ -6,7 +6,8 @@ Command line front-end for the same engines the Tk GUI uses:
 * ``ipm_search.archive_search_all``  - deterministic distro/BSD/archive.org lookup
 * ``ipm_search.ia_iso_search``       - Internet Archive catalogue (non-Windows families)
 * ``ipm_ia.ia_generic_search``       - "Archive.org (any ISO)" catch-all engine for uncurated systems
-* ``ipm_search.windows_iso_search``  - Windows release medias (Windows only)
+* ``ipm_search.windows_iso_search``  - Windows release medias, retail and LTSC
+  (Windows only)
 * ``ipm_search.web_search_iso_urls`` - optional web-engine fallback (DuckDuckGo/SearxNG/Google)
 
 Examples

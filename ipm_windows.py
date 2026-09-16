@@ -13,7 +13,10 @@ Internet Archive's public catalogue:
      ``application/x-iso9660-image``; supports HEAD and Range requests, so the
      app's Validate and download paths work unchanged)
 
-Supported releases: Windows 11, 10, 8.1, 8, 7, Vista and XP.
+Supported releases: Windows 11, 10, 8.1, 8, 7, Vista and XP, the long-term
+servicing channel (LTSC) editions - Windows 11 / 10 Enterprise LTSC and their
+IoT Enterprise LTSC variants - and the Windows Server line (2025, 2022, 2019,
+2016, 2012 R2, 2012, 2008 R2).
 
 Notes
 -----
@@ -21,6 +24,13 @@ Notes
   builds are filtered out, and each name includes its byte size so a full
   retail image can be told apart from a trimmed one. Even so, compare the hash
   against Microsoft's official hash list before installing.
+* LTSC results are matched on the *item* title, because Microsoft's LTSC file
+  names use the generic enterprise form (``X23-81951_26100.1742..._CLIENT_
+  ENTERPRISES_OEM_x64FRE_en-us.iso``) and never contain the word "LTSC".
+* Windows Server media is published by Microsoft only as an evaluation build
+  (or, for the retired releases, not at all), so the Server sources resolve
+  against the preserved Internet Archive items just like the other legacy
+  releases; the evaluation images expire unless a licence is applied.
 * A genuine Windows licence/key is still required to activate any of these.
 """
 
@@ -60,6 +70,98 @@ _MAX_ROWS = 30
 # Order matters: the list is scanned top-down and matched text is consumed, so
 # "Windows 8.1" wins over "Windows 8".
 WINDOWS_TARGETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # LTSC (long-term servicing channel) editions come first: a query such as
+    # "windows 11 ltsc" must not fall through to the plain retail entry, or the
+    # LTSC media is never searched for and only retail images are returned.
+    (
+        "Windows 11 Enterprise LTSC",
+        (
+            "windows 11 enterprise ltsc",
+            "win 11 enterprise ltsc",
+            "win11 enterprise ltsc",
+            "windows11 enterprise ltsc",
+            "windows 11 ltsc",
+            "win 11 ltsc",
+            "win11 ltsc",
+            "windows11 ltsc",
+        ),
+    ),
+    (
+        "Windows 11 IoT Enterprise LTSC",
+        (
+            "windows 11 iot enterprise ltsc",
+            "win 11 iot enterprise ltsc",
+            "win11 iot enterprise ltsc",
+            "windows 11 iot ltsc",
+            "win 11 iot ltsc",
+            "win11 iot ltsc",
+        ),
+    ),
+    (
+        "Windows 10 Enterprise LTSC",
+        (
+            "windows 10 enterprise ltsc",
+            "win 10 enterprise ltsc",
+            "win10 enterprise ltsc",
+            "windows10 enterprise ltsc",
+            "windows 10 ltsc",
+            "win 10 ltsc",
+            "win10 ltsc",
+            "windows10 ltsc",
+        ),
+    ),
+    (
+        "Windows 10 IoT Enterprise LTSC",
+        (
+            "windows 10 iot enterprise ltsc",
+            "win 10 iot enterprise ltsc",
+            "win10 iot enterprise ltsc",
+            "windows 10 iot ltsc",
+            "win 10 iot ltsc",
+            "win10 iot ltsc",
+        ),
+    ),
+    # Windows Server releases, newest first. "2012 R2" must precede "2012":
+    # the list is scanned top-down and each match is consumed, so the base
+    # entry would otherwise swallow a "windows server 2012 r2" query.
+    (
+        "Windows Server 2025",
+        ("windows server 2025", "win server 2025", "winserver 2025", "server 2025"),
+    ),
+    (
+        "Windows Server 2022",
+        ("windows server 2022", "win server 2022", "winserver 2022", "server 2022"),
+    ),
+    (
+        "Windows Server 2019",
+        ("windows server 2019", "win server 2019", "winserver 2019", "server 2019"),
+    ),
+    (
+        "Windows Server 2016",
+        ("windows server 2016", "win server 2016", "winserver 2016", "server 2016"),
+    ),
+    (
+        "Windows Server 2012 R2",
+        (
+            "windows server 2012 r2",
+            "win server 2012 r2",
+            "winserver 2012 r2",
+            "server 2012 r2",
+        ),
+    ),
+    (
+        "Windows Server 2012",
+        ("windows server 2012", "win server 2012", "winserver 2012", "server 2012"),
+    ),
+    (
+        "Windows Server 2008 R2",
+        (
+            "windows server 2008 r2",
+            "win server 2008 r2",
+            "winserver 2008 r2",
+            "server 2008 r2",
+        ),
+    ),
     ("Windows 11", ("windows 11", "win 11", "win11", "windows11", "win-11")),
     ("Windows 10", ("windows 10", "win 10", "win10", "windows10", "win-10")),
     ("Windows 8.1", ("windows 8.1", "win 8.1", "win8.1", "windows8.1", "win-8.1")),
@@ -69,7 +171,10 @@ WINDOWS_TARGETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Windows XP", ("windows xp", "win xp", "winxp", "windowsxp", "xp")),
 )
 
-# What a bare "windows" query expands to (the releases this app advertises).
+# What a bare "windows" query expands to. The LTSC editions are deliberately
+# not in this list: they have their own UI sources, a bare "ltsc" query
+# resolves to all of them, and leaving them out keeps "Windows (all versions)"
+# to the retail releases (4 fewer catalogue lookups per search).
 DEFAULT_WINDOWS_VERSIONS: tuple[str, ...] = (
     "Windows 11",
     "Windows 10",
@@ -82,13 +187,25 @@ DEFAULT_WINDOWS_VERSIONS: tuple[str, ...] = (
 # Source names offered in the UI's "Windows" category.
 WINDOWS_SOURCES: tuple[str, ...] = (
     "Windows 11",
+    "Windows 11 Enterprise LTSC",
+    "Windows 11 IoT Enterprise LTSC",
     "Windows 10",
+    "Windows 10 Enterprise LTSC",
+    "Windows 10 IoT Enterprise LTSC",
     "Windows 8.1",
     "Windows 8",
     "Windows 7",
     "Windows Vista",
     "Windows XP",
+    "Windows Server 2025",
+    "Windows Server 2022",
+    "Windows Server 2019",
+    "Windows Server 2016",
+    "Windows Server 2012 R2",
+    "Windows Server 2012",
+    "Windows Server 2008 R2",
     "Windows (all versions)",
+    "Windows Server (all versions)",
 )
 
 # Legacy UI names, kept so existing saved settings keep working.
@@ -100,6 +217,35 @@ WINDOWS_UI_ALIASES: dict[str, str] = {
 # Search terms used against the Internet Archive per release. The first is the
 # canonical Microsoft name; the extra one catches the common short form.
 _IA_TERMS: dict[str, tuple[str, ...]] = {
+    # The plain "ltsc" term is included for the LTSC editions on purpose: those
+    # items are catalogued under titles such as "Windows 11 LTSC 2024", and the
+    # per-release matcher below still discards everything belonging to another
+    # edition. Without this term the LTSC releases resolve to the retail query
+    # and their media never appears in the result list.
+    "Windows 11 Enterprise LTSC": (
+        "windows 11 enterprise ltsc",
+        "windows 11 ltsc",
+        "enterprise ltsc",
+        "ltsc",
+    ),
+    "Windows 11 IoT Enterprise LTSC": (
+        "windows 11 iot enterprise ltsc",
+        "windows 11 iot ltsc",
+        "iot enterprise ltsc",
+        "ltsc",
+    ),
+    "Windows 10 Enterprise LTSC": (
+        "windows 10 enterprise ltsc",
+        "windows 10 ltsc",
+        "enterprise ltsc",
+        "ltsc",
+    ),
+    "Windows 10 IoT Enterprise LTSC": (
+        "windows 10 iot enterprise ltsc",
+        "windows 10 iot ltsc",
+        "iot enterprise ltsc",
+        "ltsc",
+    ),
     "Windows 11": ("windows 11", "win11"),
     "Windows 10": ("windows 10", "win10"),
     "Windows 8.1": ("windows 8.1", "win8.1"),
@@ -107,18 +253,118 @@ _IA_TERMS: dict[str, tuple[str, ...]] = {
     "Windows 7": ("windows 7", "win7"),
     "Windows Vista": ("windows vista", "winvista"),
     "Windows XP": ("windows xp", "winxp"),
+    # Server search terms. "winserver" catches the squashed identifiers
+    # ("winserver2022eval") that repackers and archivists both tend to use.
+    "Windows Server 2025": ("windows server 2025", "winserver 2025", "server 2025"),
+    "Windows Server 2022": ("windows server 2022", "winserver 2022", "server 2022"),
+    "Windows Server 2019": ("windows server 2019", "winserver 2019", "server 2019"),
+    "Windows Server 2016": ("windows server 2016", "winserver 2016", "server 2016"),
+    "Windows Server 2012 R2": (
+        "windows server 2012 r2",
+        "windows server 2012",
+        "server 2012 r2",
+    ),
+    "Windows Server 2012": ("windows server 2012", "server 2012"),
+    "Windows Server 2008 R2": ("windows server 2008 r2", "server 2008 r2"),
 }
 
 # Short tag shown in the result list, e.g. "[Win 8.1] Win8.1_English_x64.iso".
 _SHORT_TAG: dict[str, str] = {
     "Windows 11": "Win 11",
+    "Windows 11 Enterprise LTSC": "Win 11 LTSC",
+    "Windows 11 IoT Enterprise LTSC": "Win 11 IoT LTSC",
     "Windows 10": "Win 10",
+    "Windows 10 Enterprise LTSC": "Win 10 LTSC",
+    "Windows 10 IoT Enterprise LTSC": "Win 10 IoT LTSC",
     "Windows 8.1": "Win 8.1",
     "Windows 8": "Win 8",
     "Windows 7": "Win 7",
     "Windows Vista": "Win Vista",
     "Windows XP": "Win XP",
+    "Windows Server 2025": "Srv 2025",
+    "Windows Server 2022": "Srv 2022",
+    "Windows Server 2019": "Srv 2019",
+    "Windows Server 2016": "Srv 2016",
+    "Windows Server 2012 R2": "Srv 2012 R2",
+    "Windows Server 2012": "Srv 2012",
+    "Windows Server 2008 R2": "Srv 2008 R2",
 }
+
+# LTSC releases, in the order a bare "ltsc"/"ltsb" query reports them.
+LTSC_TARGETS: tuple[str, ...] = (
+    "Windows 11 Enterprise LTSC",
+    "Windows 11 IoT Enterprise LTSC",
+    "Windows 10 Enterprise LTSC",
+    "Windows 10 IoT Enterprise LTSC",
+)
+
+# Windows Server releases, in the order a bare "windows server" query reports
+# them (newest first, "2012 R2" before "2012").
+SERVER_TARGETS: tuple[str, ...] = (
+    "Windows Server 2025",
+    "Windows Server 2022",
+    "Windows Server 2019",
+    "Windows Server 2016",
+    "Windows Server 2012 R2",
+    "Windows Server 2012",
+    "Windows Server 2008 R2",
+)
+
+# A bare "windows server"/"win server" query names the product line but no
+# version, and expands to every Server release. The lookahead keeps the pattern
+# from firing on unrelated server products ("ubuntu server" does not start with
+# windows/win).
+_SERVER_GENERIC_RE = re.compile(r"(?i)\b(?:windows|win)[ _]?(?:server|srv)\b")
+
+# Source names offered in the UI's dedicated "Windows Server" category.
+SERVER_SOURCES: tuple[str, ...] = SERVER_TARGETS + ("Windows Server (all versions)",)
+
+# Windows Server 2012 and 2012 R2 share one base title, so the base release has
+# to recognise and skip the R2 media the release matcher lets through.
+_SERVER_R2_RE = re.compile(r"(?i)\br2\b")
+_R2_EXCLUDED_LABELS: tuple[str, ...] = ("Windows Server 2012",)
+
+# Server media, detected by file name only: catalogue titles are often shared
+# with desktop releases (an AIO item carrying Windows 7 *and* Server 2008 R2),
+# so the title must not be used here.
+_SERVER_MEDIA_RE = re.compile(r"(?i)(?:\bserver\b|\bsrv\b|winserver|winsrv)")
+
+# Desktop media, detected by file name. A Server item can bundle a desktop
+# release under one shared title (Windows 7 and Server 2008 R2 share a kit), and
+# the desktop image then matches the Server release through that title alone.
+_CLIENT_MEDIA_RE = re.compile(
+    r"(?i)\bwin(?:dows)?[ _-]?(?:xp|vista|7|8\.1|8|10|11)\b"
+)
+
+# Microsoft products that share the word "server" but are no operating system
+# image at all; they must never show up in a Windows release list.
+_NON_OS_SERVER_RE = re.compile(
+    r"(?i)(?:mssql|sql[ _-]?server|exchange[ _-]?server|multipoint[ _-]?server|"
+    r"sharepoint|lync[ _-]?server|system[ _-]?center|biztalk)"
+)
+
+# Media whose file name names a release the catalogue title never mentions:
+# Microsoft's Server 2012 R2 volume kit is simply "HRM_SSS_X64FRE_EN-US_DV5.ISO".
+_MEDIA_RELEASE_HINTS: tuple[tuple[str, str], ...] = (
+    (r"(?i)hrm[ _]?sss", "Windows Server 2012 R2"),
+)
+
+# "windows 11 ltsc" names the edition but not the IoT Enterprise variant, and
+# both are what somebody asking for LTSC media generally wants. The reverse is
+# not true, so an explicit "iot" query stays narrow.
+_LTSC_SIBLINGS: dict[str, str] = {
+    "Windows 11 Enterprise LTSC": "Windows 11 IoT Enterprise LTSC",
+    "Windows 10 Enterprise LTSC": "Windows 10 IoT Enterprise LTSC",
+}
+
+_LTSC_RE = re.compile(r"(?i)\blts[bc]\b")
+
+# Edition names in a query mean the interesting media sits below the consumer
+# images in the popularity ranking, so read a few more catalogue items.
+_EDITION_RE = re.compile(
+    r"(?i)\b(lts[bc]|iot|enterprise|eval(?:uation)?|education|embedded|server)\b"
+)
+_EDITION_ROWS = 10
 
 LICENSE_NOTE = (
     "Internet Archive hosts user-contributed Microsoft media. Names include the "
@@ -205,7 +451,21 @@ def has_windows_support(query: str) -> bool:
     """True when a free-text query should pull in the Windows catalogues."""
     if match_windows_versions(query):
         return True
+    if _LTSC_RE.search(_norm_query(query)):
+        return True
     return looks_like_windows_query(query)
+
+
+def _expand_ltsc_targets(query: str, labels: list[str]) -> list[str]:
+    """Widen a named LTSC edition to the IoT Enterprise sibling it implies."""
+    if "iot" in _norm_query(query):
+        return labels
+    out = list(labels)
+    for label in labels:
+        sibling = _LTSC_SIBLINGS.get(label)
+        if sibling and sibling not in out:
+            out.append(sibling)
+    return out
 
 
 def resolve_windows_targets(query: str) -> list[str]:
@@ -216,13 +476,26 @@ def resolve_windows_targets(query: str) -> list[str]:
     if aliased == "Windows (all versions)":
         return list(DEFAULT_WINDOWS_VERSIONS)
 
+    if aliased == "Windows Server (all versions)":
+        return list(SERVER_TARGETS)
+
     exact = [label for label, _ in WINDOWS_TARGETS if label == aliased]
     if exact:
-        return exact
+        return _expand_ltsc_targets(aliased, exact)
 
     named = match_windows_versions(aliased)
     if named:
-        return named
+        return _expand_ltsc_targets(aliased, named)
+
+    if _LTSC_RE.search(_norm_query(aliased)):
+        # A bare "windows ltsc" / "ltsb" query: every LTSC edition we know.
+        return list(LTSC_TARGETS)
+
+    if _SERVER_GENERIC_RE.search(_norm_query(aliased)):
+        # A bare "windows server" / "win server" query: every Server release.
+        # Versioned queries ("windows server 2022") were already resolved by
+        # the exact-label and release-matcher branches above.
+        return list(SERVER_TARGETS)
 
     if looks_like_windows_query(aliased):
         return list(DEFAULT_WINDOWS_VERSIONS)
@@ -334,7 +607,10 @@ _JUNK_RE = re.compile(
 # mention such words.
 _JUNK_STRONG_RE = re.compile(
     r"(?i)(lite|nano|tiny|ghost|spectre|crack|activat|kms|pirat|bloat|"
-    r"mod(?:ded|ified)|hack|winpe|unattend)"
+    r"mod(?:ded|ified)|hack|winpe|unattend|"
+    # "CLIENT_LOF_PACKAGES_OEM" - a language-pack ISO stored inside an LTSC
+    # item, not an operating system image.
+    r"client_lof|lof_packages|langpack|language_?pack)"
 )
 
 # Genuine, but not a plain retail image - kept, just ranked lower.
@@ -345,14 +621,71 @@ _ALT_RE = re.compile(
 
 # Microsoft's own media naming (en_windows_7_..., X17-58997.iso, Win10_22H2_...).
 _MS_MEDIA_RE = re.compile(
-    r"(?i)^(en_|x1[0-9]-\d{4,}|x2[0-9]-\d{4,}|win(?:dows)?[ _-]?"
-    r"(?:xp|vista|7|8|8\.1|10|11)|windows_)"
+    r"(?i)^(en[-_]|x1[0-9]-\d{4,}|x2[0-9]-\d{4,}|win(?:dows)?[ _-]?"
+    r"(?:xp|vista|7|8|8\.1|10|11|server)|windows_|"
+    # "20348.169.210806-2348..._SERVER_EVAL_x64FRE_en-us.iso" and the other
+    # build-numbered Server images Microsoft publishes through the Eval Center.
+    r"\d{5}\.\d+\.)"
 )
 
 
 def _is_junk(identifier: str, title: str, filename: str) -> bool:
     hay = f"{identifier} {filename}"
-    return bool(_JUNK_RE.search(hay) or _JUNK_STRONG_RE.search(hay))
+    return bool(
+        _JUNK_RE.search(hay)
+        or _JUNK_STRONG_RE.search(hay)
+        or _NON_OS_SERVER_RE.search(hay)
+    )
+
+
+def _is_ltsc_media(filename: str, title: str) -> bool:
+    """True when the file name or its item title marks LTSC / LTSB media.
+
+    LTSC images are catalogued under the very same titles as retail ones
+    ("Windows 11 LTSC 2024", and Microsoft's files even say only
+    CLIENT_ENTERPRISES), so the retail entries have to recognise and skip them;
+    otherwise a "Windows 11" search reports LTSC builds as retail media.
+    """
+    # Normalised first: catalogued file names use underscores
+    # ("..._iot_enterprise_ltsc_2024_x64_..."), where a plain \bltsc\b would
+    # never fire because "_" is a word character.
+    return bool(
+        _LTSC_RE.search(_norm_query(filename or ""))
+        or _LTSC_RE.search(_norm_query(title or ""))
+    )
+
+
+def _is_server_media(filename: str) -> bool:
+    """True when a file name marks Windows Server media.
+
+    Name-only on purpose: an Internet Archive item can hold a desktop release
+    and a Server image side by side (they shared one media kit), and the item
+    title then describes both, which would make a title check skip the desktop
+    image as well.
+    """
+    return bool(_SERVER_MEDIA_RE.search(_norm_query(filename or "")))
+
+
+def _is_r2_media(filename: str, title: str) -> bool:
+    """True when the file name or item title marks a Windows Server 2012 R2 image."""
+    return bool(
+        _SERVER_R2_RE.search(_norm_query(filename or ""))
+        or _SERVER_R2_RE.search(_norm_query(title or ""))
+    )
+
+
+def _hinted_release(filename: str) -> str:
+    """Release label a file name implies, or "" when it implies none.
+
+    Only needed where neither the file name nor the item title carry release
+    text: Microsoft's Server 2012 R2 volume kit is catalogued as
+    "HRM_SSS_X64FRE_EN-US_DV5.ISO", so the usual matcher cannot place it.
+    """
+    norm = _norm_query(filename or "")
+    for pattern, label in _MEDIA_RELEASE_HINTS:
+        if re.search(pattern, norm):
+            return label
+    return ""
 
 
 def _score(filename: str, size: int, downloads: int, title: str) -> tuple:
@@ -407,6 +740,10 @@ def windows_iso_search(
         return []
 
     rows = _rows_for_level(archive_level)
+    if _EDITION_RE.search(query or ""):
+        # Enterprise / LTSC / education media is less downloaded than the
+        # consumer images, so the default 6 rows would miss it completely.
+        rows = max(rows, _EDITION_ROWS)
     out: list[RemoteIsoItem] = []
     seen_files: dict[str, tuple] = {}
     limit = max_items if max_items and max_items > 0 else -1
@@ -440,7 +777,34 @@ def windows_iso_search(
                 size = int(f.get("size") or 0)
                 if _is_junk(ident, title, name):
                     continue
-                if not _mentions_release(label, name, title):
+                if (
+                    label not in LTSC_TARGETS
+                    and label not in SERVER_TARGETS
+                    and _is_ltsc_media(name, title)
+                ):
+                    # LTSC media shares the retail titles, so the retail
+                    # entries would otherwise list LTSC builds as plain
+                    # Windows 11 / 10 images. It belongs to its own sources.
+                    continue
+                if label in SERVER_TARGETS and _CLIENT_MEDIA_RE.search(_norm_query(name)):
+                    # The desktop half of a shared media kit belongs to the
+                    # desktop sources, never to the Server release list.
+                    continue
+                if label not in SERVER_TARGETS and _is_server_media(name):
+                    # A Windows 7 item can also carry Windows Server 2008 R2
+                    # media; that belongs to the Server sources, not this one.
+                    continue
+                if label in _R2_EXCLUDED_LABELS and _is_r2_media(name, title):
+                    # "Windows Server 2012" must not report the R2 build, which
+                    # is catalogued under the same base title.
+                    continue
+                hinted = _hinted_release(name)
+                if hinted:
+                    # The file name names the release the title does not, so it
+                    # decides; without this the 2012 R2 kit lands under 2012.
+                    if hinted != label:
+                        continue
+                elif not _mentions_release(label, name, title):
                     continue
                 candidates.append((_score(name, size, downloads, title), name, size, ident))
 

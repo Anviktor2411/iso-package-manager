@@ -64,6 +64,7 @@ from ipm_winops import (
     unmount_iso,
 )
 from ipm_windows import (
+    SERVER_SOURCES,
     WINDOWS_SOURCES,
     is_windows_source,
     windows_iso_search,
@@ -1981,7 +1982,7 @@ class App(tk.Tk):
             sidebar,
             textvariable=self._cat_var,
             state="readonly",
-            values=["All", "Windows", "Archive.org", "Mainstream", "Security/Pentest", "Lightweight", "Specialty", "BSD/Other"],
+            values=["All", "Windows", "Windows Server", "Archive.org", "Mainstream", "Security/Pentest", "Lightweight", "Specialty", "BSD/Other"],
         )
         self._cat_combo.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self._cat_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_category_changed())
@@ -2380,6 +2381,7 @@ class App(tk.Tk):
             "Custom Source",
         ]
         windows_sources = list(WINDOWS_SOURCES)
+        server_sources = list(SERVER_SOURCES)
         archive_sources = [s for s in IA_SOURCES if s not in windows_sources]
 
         def _sorted_sources(src: list[str]) -> list[str]:
@@ -2399,6 +2401,10 @@ class App(tk.Tk):
         if cat == "BSD/Other":
             # Keep as curated order, but ensure Custom Source remains last.
             return _sorted_sources(bsd_other)
+        if cat == "Windows Server":
+            # Server releases only, newest first; Custom Source stays last.
+            return server_sources + ["Custom Source"]
+
         if cat == "Windows":
             # Keep release order (newest first); Custom Source stays last.
             return windows_sources + ["Custom Source"]
@@ -2450,6 +2456,12 @@ class App(tk.Tk):
             return "https://www.microsoft.com/software-download/windows11"
         if source in ("Windows 10 (Microsoft)", "Windows 10"):
             return "https://www.microsoft.com/software-download/windows10"
+        # LTSC editions are not on Microsoft's consumer download pages; the
+        # preserved media lives in the Internet Archive catalogue.
+        if source in ("Windows 11 Enterprise LTSC", "Windows 11 IoT Enterprise LTSC"):
+            return "https://archive.org/search?query=windows+11+ltsc+iso"
+        if source in ("Windows 10 Enterprise LTSC", "Windows 10 IoT Enterprise LTSC"):
+            return "https://archive.org/search?query=windows+10+ltsc+iso"
         if source in ("Windows 8.1", "Windows 8"):
             return "https://www.microsoft.com/software-download/windows8"
         if source == "Windows 7":
@@ -2458,6 +2470,25 @@ class App(tk.Tk):
             return "https://archive.org/search?query=windows+vista+iso"
         if source == "Windows XP":
             return "https://archive.org/search?query=windows+xp+iso"
+        # Windows Server is published as an evaluation build on the Eval Center
+        # (2025 downwards to 2012 R2); the retired releases are not offered by
+        # Microsoft any more and fall back to the preserved Archive items.
+        if source == "Windows Server 2025":
+            return ("https://www.microsoft.com/en-us/evalcenter/"
+                    "download-windows-server-2025")
+        if source in ("Windows Server 2022", "Windows Server 2019",
+                      "Windows Server 2016"):
+            return ("https://www.microsoft.com/en-us/evalcenter/"
+                    "download-windows-server-%s" % source.rsplit(" ", 1)[-1])
+        if source == "Windows Server 2012 R2":
+            return ("https://www.microsoft.com/en-us/evalcenter/"
+                    "download-windows-server-2012-r2")
+        if source == "Windows Server 2012":
+            return "https://archive.org/search?query=windows+server+2012+iso"
+        if source == "Windows Server 2008 R2":
+            return "https://archive.org/search?query=windows+server+2008+r2+iso"
+        if source == "Windows Server (all versions)":
+            return "https://archive.org/search?query=windows+server+iso"
         if source == "Windows (all versions)":
             return "https://archive.org/search?query=microsoft+windows+iso"
         if source == "Linux Kernel (kernel.org)":
