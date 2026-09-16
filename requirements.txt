@@ -1,0 +1,2 @@
+pywebview>=4.4
+certifi>=2024.2.2

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local app artifacts
+*.log
+*.tmp
+
+# ISO / large binaries (avoid accidentally committing downloads)
+*.iso
+*.img
+*.bin
+*.cue
+*.nrg
+*.mdf
+*.vhd
+*.vhdx
+
+# Tkinter / UI
+*.tk
+
