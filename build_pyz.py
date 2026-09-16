@@ -5,13 +5,17 @@ The result is ``dist/iso-package-manager-<version>.pyz``: a self-contained
 Python zipapp that starts with a ``#!/usr/bin/env python3`` shebang.  On
 Linux/macOS the file *is* the program once it is marked executable::
 
-    chmod +x dist/iso-package-manager-0.8.pyz
-    ./dist/iso-package-manager-0.8.pyz          # asks UI or Terminal
+    chmod +x dist/iso-package-manager-0.9.pyz
+    ./dist/iso-package-manager-0.9.pyz          # asks UI or Terminal
 
 On Windows it can still be run, which is what the build machine uses to
 smoke-test the archive::
 
-    python dist\\iso-package-manager-0.8.pyz --version
+    python dist\\iso-package-manager-0.9.pyz --version
+
+The ``themes/`` folder is baked in as ``<archive>/themes``, which
+``ipm_themes.py`` reads straight out of the zip - so the one downloaded file
+already has theme packs to pick from, with no extra ``themes`` folder needed.
 
 Why a zipapp:
 
@@ -41,6 +45,7 @@ import shutil
 import sys
 import tempfile
 import zipapp
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -63,10 +68,19 @@ MODULES = (
     "ipm_windows.py",
     "ipm_winops.py",
     "main.py",
+    # Optional, but without it the archive has no theme-pack support at all
+    # (main.py imports it defensively, so a missing copy is silently ignored).
+    "ipm_themes.py",
 )
 
 # Docs are tiny and make the archive self-describing.
 EXTRAS = ("README.md", "SEARCH_GUIDE.md", "SECURITY.md")
+
+# Theme packs are baked into the archive as <archive>/themes/<pack>.json.  That
+# is the last entry in ipm_themes.search_paths(), so whatever the user installs
+# later always wins - but a freshly downloaded .pyz still has themes to show.
+THEMES_FOLDER = "themes"
+THEMES_DIR = ROOT / THEMES_FOLDER
 
 # zipapp normally generates a __main__.py that calls the entry point without
 # propagating its return value, which would swallow exit codes (bad for
@@ -113,6 +127,14 @@ def build(out_dir: Path) -> Path:
             src = ROOT / name
             if src.is_file():
                 shutil.copy2(src, staging / name)
+
+        if THEMES_DIR.is_dir():
+            staged_themes = staging / THEMES_FOLDER
+            staged_themes.mkdir(parents=True, exist_ok=True)
+            for pack in sorted(THEMES_DIR.glob("*.json")):
+                if pack.is_file():
+                    shutil.copy2(pack, staged_themes / pack.name)
+
         (staging / "__main__.py").write_text(MAIN_TEMPLATE, encoding="utf-8")
 
         # Skip __pycache__ inside the staging tree (copy2 above never creates
@@ -142,6 +164,21 @@ def build(out_dir: Path) -> Path:
     return target
 
 
+def bundled_theme_count(archive: Path) -> int:
+    """Pack files stored under ``themes/`` inside a finished archive."""
+    prefix = THEMES_FOLDER + "/"
+    try:
+        with zipfile.ZipFile(archive) as handle:
+            return sum(
+                1
+                for name in handle.namelist()
+                if name.replace("\\", "/").lower().startswith(prefix)
+                and name.lower().endswith(".json")
+            )
+    except (OSError, zipfile.BadZipFile):  # pragma: no cover - just built it
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the Linux/macOS single-file executable.")
     parser.add_argument("--out", default=str(DIST), help="output directory (default: ./dist)")
@@ -152,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"built: {target}")
     print(f"  size:        {size:,} bytes")
-    print("  interpreter: /usr/bin/env python3   (needs python3 >= 3.10 + tkinter)")
+    print(f"  themes:      {bundled_theme_count(target)} theme pack(s) bundled inside")
+    print(f"  interpreter: /usr/bin/env python3   (needs python3 >= 3.10 + tkinter)")
     print()
     print("  Linux / macOS:")
     print(f"    chmod +x {target.name}")

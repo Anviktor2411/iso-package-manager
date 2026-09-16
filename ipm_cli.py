@@ -18,6 +18,8 @@ Examples
     python ipm_cli.py search serenityos
     python ipm_cli.py fetch "bazzite" -d D:\\isos -y
     python ipm_cli.py url debian
+    python ipm_cli.py themes
+    python ipm_cli.py themes --preview
 
 Any operating system, even one this tool has no curated catalogue for, can be
 searched through the generic archive.org engine::
@@ -53,6 +55,11 @@ from ipm_search import (
 )
 from ipm_utils import human_bytes, ssl_context_for_https
 from ipm_windows import WINDOWS_SOURCES, is_windows_source, windows_iso_search
+
+try:  # optional: theme packs are additive, the terminal edition works without them
+    import ipm_themes
+except Exception:  # pragma: no cover
+    ipm_themes = None
 
 DEFAULT_LIMIT = 12
 EXIT_OK = 0
@@ -455,6 +462,64 @@ def cmd_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_themes(args: argparse.Namespace) -> int:
+    """List the built-in themes plus every installed theme pack."""
+    if ipm_themes is None:
+        _err("theme support is unavailable: ipm_themes.py was not found next to this script.")
+        return EXIT_ERROR
+
+    name = (getattr(args, "name", "") or "").strip()
+    if getattr(args, "preview", False):
+        print(ipm_themes.ansi_preview(name or None))
+        return EXIT_OK
+
+    registry = ipm_themes.get_registry(refresh=True)
+
+    if name:
+        found = registry.get(name)
+        if found is None:
+            _err(f"no theme called {name!r} - run 'ipm_cli.py themes' to see the list.")
+            return EXIT_NO_RESULTS
+        kind = "built-in" if found.is_builtin else "theme pack"
+        print(bold(f"{found.name}  [{found.id}]  ({kind})"))
+        if found.author:
+            print(f"  by {found.author}" + (f"  v{found.version}" if found.version else ""))
+        if found.description:
+            print(dim(f"  {found.description}"))
+        if not found.is_builtin:
+            print(dim(f"  base: {found.base}    file: {found.source}"))
+        print()
+        for key in ipm_themes.COLOR_KEYS:
+            print(f"  {key:<16} {found.color(key)}")
+        return EXIT_OK
+
+    builtins = registry.builtins()
+    packs = registry.packs()
+    print(bold(f"{len(builtins) + len(packs)} theme(s): {len(builtins)} built-in, {len(packs)} theme pack(s)"))
+    print()
+    print(bold("  Built-in"))
+    for theme in builtins:
+        print(f"    {theme.id:<16} {theme.name}")
+    print()
+    print(bold("  Theme packs"))
+    if not packs:
+        print(dim(f"    (none - install one with 'python tools/ipmtheme.py install <file>')"))
+    for theme in packs:
+        ver = f" v{theme.version}" if theme.version else ""
+        credit = f" by {theme.author}" if theme.author else dim(" (no author set)")
+        print(f"    {theme.id:<16} {theme.name}{ver}{credit}")
+
+    if registry.problems:
+        print()
+        print(warn(f"  {len(registry.problems)} pack(s) were skipped:"))
+        for problem in registry.problems:
+            print(warn(f"    - {problem}"))
+
+    print()
+    print(dim("  run 'ipm_cli.py themes --preview' to see one drawn in the terminal"))
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -514,6 +579,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("what", nargs="?", default="all", help="all | archive | windows | linux")
     p_list.set_defaults(func=cmd_list)
 
+    p_themes = sub.add_parser("themes", help="list built-in themes and installed theme packs")
+    p_themes.add_argument("name", nargs="?", default="", help="show one theme in detail (id or name)")
+    p_themes.add_argument("--preview", action="store_true", help="draw the theme as a colour preview in the terminal")
+    p_themes.set_defaults(func=cmd_themes)
+
     return parser
 
 
@@ -523,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return EXIT_USAGE
-    if args.command != "list" and not (getattr(args, "query", "") or getattr(args, "source", "")):
+    if args.command not in ("list", "themes") and not (getattr(args, "query", "") or getattr(args, "source", "")):
         _err('give a query, or pin a source with -s (e.g. -s "' + IA_GENERIC_LABEL + '").')
         return EXIT_USAGE
     try:

@@ -70,6 +70,54 @@ from ipm_windows import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Theme packs (ipm_themes.py) - optional, additive
+# ---------------------------------------------------------------------------
+# When ipm_themes.py sits next to this file, ISO Package Manager also loads
+# themes that users install themselves (.ipmtheme.json files). If the module is
+# missing, the four built-in themes below keep working exactly as before.
+try:
+    import ipm_themes as _ipm_themes
+except Exception:  # pragma: no cover - theme packs are optional
+    _ipm_themes = None
+
+
+def _ipm_theme_menu_entries() -> list:
+    """Menu labels: the built-ins, then a separator, then installed packs."""
+    builtins = ["Default", "Modern Dark", "Windows XP", "Graphical"]
+    if _ipm_themes is None:
+        return builtins
+    try:
+        packs = [t.name for t in _ipm_themes.get_registry().packs()]
+    except Exception:
+        packs = []
+    if not packs:
+        return builtins
+    return builtins + [None] + packs
+
+
+def _ipm_theme_labels() -> list:
+    """The same labels without the separator (for the Settings combobox)."""
+    return [label for label in _ipm_theme_menu_entries() if label]
+
+
+def _ipm_pack_kwargs(theme: str):
+    """Flat palette/style dict for an installed pack, else ``None``.
+
+    Returns ``None`` for the built-in themes so the hand-written palettes in
+    ``_apply_style`` stay the single source of truth for them.
+    """
+    if _ipm_themes is None or not theme:
+        return None
+    try:
+        found = _ipm_themes.get_registry().get(theme)
+        if found is None or found.is_builtin:
+            return None
+        return found.style_kwargs()
+    except Exception:
+        return None
+
+
 def can_open_in_app_webview() -> bool:
     return webview is not None
 
@@ -434,7 +482,7 @@ def open_url_in_app(url: str, title: str = "Browser", ipc_path: str | None = Non
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ISO Package Manager V0.8")
+        self.title("ISO Package Manager V0.9")
         want_w, want_h = 980, 640
         try:
             want_w = max(720, min(want_w, self.winfo_screenwidth() - 80))
@@ -532,7 +580,10 @@ class App(tk.Tk):
     def _build_menu(self):
         menubar = tk.Menu(self)
         theme_menu = tk.Menu(menubar, tearoff=0)
-        for label in ("Default", "Modern Dark", "Windows XP", "Graphical"):
+        for label in _ipm_theme_menu_entries():
+            if label is None:
+                theme_menu.add_separator()
+                continue
             theme_menu.add_radiobutton(
                 label=label,
                 value=label,
@@ -952,6 +1003,29 @@ class App(tk.Tk):
                 tree_heading_bg = bg
                 tab_bg = panel
                 tab_selected_bg = bg
+
+            # -- theme packs (ipm_themes) ---------------------------------
+            # A user-installed pack paints with its own palette. Anything the
+            # pack leaves unset keeps the value from the base theme above, so a
+            # one-colour pack still behaves. ``_pack`` is None for built-ins.
+            _pack = _ipm_pack_kwargs(theme)
+            if _pack:
+                font_family = _pack.get("font_family") or font_family
+                bg = _pack["bg"]
+                panel = _pack["panel"]
+                text = _pack["text"]
+                muted = _pack["muted"]
+                accent = _pack["accent"]
+                accent_active = _pack["accent_active"]
+                danger = _pack["danger"]
+                danger_active = _pack["danger_active"]
+                border = _pack["border"]
+                selection = _pack["selection"]
+                tree_bg = _pack.get("tree_bg") or panel
+                tree_heading_bg = _pack.get("tree_heading_bg") or bg
+                tab_bg = _pack.get("tab_bg") or panel
+                tab_selected_bg = _pack.get("tab_selected_bg") or bg
+            # -------------------------------------------------------------
 
             default_font = (font_family, 10)
             ui_font = (font_family, 10)
@@ -1481,7 +1555,7 @@ class App(tk.Tk):
             panel,
             textvariable=self._settings_theme_var,
             state="readonly",
-            values=["Default", "Modern Dark", "Windows XP", "Graphical"],
+            values=_ipm_theme_labels(),
             width=18,
         )
         self._settings_theme_combo.grid(row=1, column=0, sticky="w", pady=(6, 10))
