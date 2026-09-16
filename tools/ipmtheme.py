@@ -77,6 +77,22 @@ def _fail(message: str) -> int:
     return EXIT_USAGE
 
 
+def _folder_state(path: Path) -> tuple[int, str | None]:
+    """``(pack count, note)`` for one search-path entry.
+
+    A folder can hold packs even when it is not a real directory: a zipapp or
+    PyInstaller build keeps its ``themes`` folder *inside* the archive.  The
+    note says so, otherwise it is ``None``.
+    """
+    try:
+        count = len(T.iter_pack_files([Path(path)]))
+    except Exception:  # pragma: no cover - defensive
+        count = 0
+    if count and not Path(path).is_dir():
+        return count, "inside the archive"
+    return count, None
+
+
 def _resolve_targets(args: argparse.Namespace) -> list[Path]:
     """Files (or folders) the user pointed at."""
     found: list[Path] = []
@@ -139,8 +155,15 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     print()
     for folder in registry.dirs:
-        exists = "exists" if Path(folder).is_dir() else dim("missing")
-        print(dim(f"  [{exists}] {folder}"))
+        count, note = _folder_state(Path(folder))
+        if Path(folder).is_dir():
+            state = "exists"
+        elif note:
+            state = note
+        else:
+            state = "missing"
+        suffix = f"  {count} pack file(s)" if count else ""
+        print(dim(f"  [{state}] {folder}{suffix}"))
     return EXIT_OK
 
 
@@ -148,16 +171,26 @@ def cmd_dir(args: argparse.Namespace) -> int:
     paths = T.search_paths(args.app_dir)
     print(bold("Theme folders, in load order (first match wins for a duplicate id):"))
     for index, path in enumerate(paths, start=1):
-        marker = "exists" if Path(path).is_dir() else warn("missing")
-        count = 0
-        if Path(path).is_dir():
-            count = len(T.iter_pack_files([path]))
+        path = Path(path)
+        count, note = _folder_state(path)
+        if path.is_dir():
+            marker = "exists"
+        elif note:
+            marker = note
+        else:
+            marker = warn("missing")
         print(f"  {index}. {path}  [{marker}]" + (f"  {count} pack file(s)" if count else ""))
     user_dir = T.user_theme_dir()
     print()
     print(f"{bold('Your packs')} go in: {user_dir}")
     if not user_dir.is_dir():
         print(dim("  (it does not exist yet - 'install' creates it for you)"))
+    bundled = T.bundled_theme_dir()
+    if bundled is not None:
+        count, _note = _folder_state(bundled)
+        print()
+        print(f"{bold('Bundled with this build')}: {bundled}")
+        print(dim(f"  {count} pack file(s) shipped inside the running archive/bundle"))
     print(dim("  Override with the IPM_THEMES_DIR environment variable (os.pathsep-separated)."))
     return EXIT_OK
 

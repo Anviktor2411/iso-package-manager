@@ -547,7 +547,7 @@ def load_pack_data(path: Path) -> tuple[dict[str, Any], str]:
 _Base = tk.Tk if TK_AVAILABLE else object
 
 
-class _ScrollFrame(ttk.Frame):
+class _ScrollFrame(ttk.Frame if TK_AVAILABLE else object):  # type: ignore[misc]
     """A vertically scrolling container with a ``body`` frame inside."""
 
     def __init__(self, parent: Any, **kwargs: Any) -> None:
@@ -857,7 +857,7 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         for label in self.pv_menu_labels:
             label.pack(side="left")
 
-        self.pv_title = tk.Label(window, text=f"  {T.APP_NAME} V0.8   -   Local ISOs", anchor="w")
+        self.pv_title = tk.Label(window, text=f"  {T.APP_NAME} V0.9   -   Local ISOs", anchor="w")
         self.pv_title.pack(fill="x")
 
         self.pv_toolbar = tk.Frame(window)
