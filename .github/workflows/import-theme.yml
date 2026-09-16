@@ -1,0 +1,72 @@
+name: Import approved theme
+
+# A maintainer adds the "approved" label to a "Share a theme" issue.
+# Only people with write access can label issues, so this is the moderation step.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: theme-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: github.event.label.name == 'approved' && contains(github.event.issue.labels.*.name, 'theme')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+
+      - name: Build the pack from the issue
+        id: imp
+        continue-on-error: true
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/import_theme_issue.py
+
+      - name: Commit
+        if: steps.imp.outputs.ok == 'true'
+        env:
+          THEME_NAME: ${{ steps.imp.outputs.name }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python tools/ipmtheme.py validate themes/ --strict
+          python scripts/build_theme_index.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add themes
+          git commit -m "Add theme: ${THEME_NAME} (#${NUMBER})" || echo "nothing to commit"
+          git push
+
+      - name: Thank the submitter
+        if: steps.imp.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MESSAGE: ${{ steps.imp.outputs.message }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "Thanks! ${MESSAGE} It shows in the gallery within a few minutes."
+          gh issue close "$NUMBER" --repo "$GITHUB_REPOSITORY"
+
+      - name: Explain what to fix
+        if: steps.imp.outputs.ok != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MESSAGE: ${{ steps.imp.outputs.message }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label approved
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "The theme could not be added automatically: ${MESSAGE:-unknown error}
+
+          Please edit the issue. A maintainer can then approve it again."
