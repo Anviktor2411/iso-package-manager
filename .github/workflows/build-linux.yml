@@ -1,0 +1,87 @@
+name: Build Linux executables
+
+# PyInstaller cannot cross-compile, so a native Linux binary has to be produced
+# on Linux. This workflow does that for you on every push and hands back
+# downloadable artifacts - no Linux machine required.
+#
+# Produces:
+#   iso-package-manager            native ELF onefile binary (no Python needed)
+#   iso-package-manager-<v>.pyz    portable zipapp for any distro with python3
+#   iso-package-manager_<v>_*.deb  Debian/Ubuntu package
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-binaries:
+    name: Linux binaries (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on 22.04 (glibc 2.35) so the binary also runs on Debian 12+,
+          # Mint, Pop!_OS and current Fedora. The 24.04 build is x86-64-v3 tuned
+          # and only runs on reasonably recent CPUs - hence a separate artifact.
+          - os: ubuntu-22.04
+            label: glibc-2.35
+          - os: ubuntu-24.04
+            label: glibc-2.39
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Use the distro python3 (not actions/setup-python) because tkinter has to
+      # come from the system package; the setup-python builds ship without it.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-tk python3-pip python3-venv dpkg-dev file
+          python3 -V
+          python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+
+      - name: Build .pyz + native binary + .deb
+        run: bash ./build_linux.sh all
+
+      - name: Verify the native binary runs
+        run: |
+          set -euo pipefail
+          ./dist/iso-package-manager --version
+          ./dist/iso-package-manager --help >/dev/null
+          ./dist/iso-package-manager --cli list archive | head -n 5
+          file dist/iso-package-manager
+
+      - name: Verify the .pyz runs
+        run: |
+          set -euo pipefail
+          PYZ="$(ls dist/iso-package-manager-*.pyz | head -n 1)"
+          test -x "$PYZ"
+          "$PYZ" --version
+          "$PYZ" --cli list archive | head -n 5
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp dist/iso-package-manager "out/iso-package-manager-${{ matrix.label }}"
+          cp dist/iso-package-manager-*.pyz out/ 2>/dev/null || true
+          cp dist/*.deb out/ 2>/dev/null || true
+          chmod +x out/*
+          ls -lh out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-executables-${{ matrix.label }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
