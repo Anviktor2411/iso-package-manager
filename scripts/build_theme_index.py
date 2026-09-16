@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build themes/index.json for the theme gallery website.
+"""Build docs/shop/index.json for the theme shop website.
 
 The gallery reads this one file instead of listing the folder. It is rebuilt by
 CI whenever themes/ changes, so nobody edits it by hand.
 
-    python scripts/build_theme_index.py          # write themes/index.json
+    python scripts/build_theme_index.py          # write docs/shop/index.json
     python scripts/build_theme_index.py --check  # exit 1 if it is out of date
 """
 from __future__ import annotations
@@ -16,8 +16,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 THEMES = ROOT / "themes"
-INDEX = THEMES / "index.json"
-SUBMISSIONS = THEMES / "submissions.json"
+SHOP = ROOT / "docs" / "shop"
+INDEX = SHOP / "index.json"
+SUBMISSIONS = SHOP / "submissions.json"
+# Kept outside themes/ on purpose: the app loads every *.json in themes/ as a pack.
 SAFE_FILE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.(png|jpe?g|webp)$")
 
 
@@ -64,12 +66,13 @@ def main() -> int:
     if "--check" in sys.argv:
         current = INDEX.read_text(encoding="utf-8") if INDEX.exists() else ""
         if current != text:
-            print("themes/index.json is out of date: run python scripts/build_theme_index.py")
+            print("docs/shop/index.json is out of date: run python scripts/build_theme_index.py")
             return 1
-        print(f"themes/index.json is up to date ({len(wanted['themes'])} themes)")
+        print(f"docs/shop/index.json is up to date ({len(wanted['themes'])} themes)")
         return 0
+    SHOP.mkdir(parents=True, exist_ok=True)
     INDEX.write_text(text, encoding="utf-8")
-    print(f"wrote themes/index.json ({len(wanted['themes'])} themes)")
+    print(f"wrote docs/shop/index.json ({len(wanted['themes'])} themes)")
     return 0
 
 

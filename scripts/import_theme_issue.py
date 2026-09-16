@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 THEMES = ROOT / "themes"
-SUBMISSIONS = THEMES / "submissions.json"
+SUBMISSIONS = ROOT / "docs" / "shop" / "submissions.json"
 RESERVED = {"default", "modern-dark", "windows-xp", "graphical"}
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 MAX_DOWNLOAD = 5_000_000
@@ -161,6 +161,7 @@ def main() -> int:
         return fail("the pack did not pass `ipmtheme.py validate --strict`:\n```\n" + report + "\n```")
 
     submissions[pack_id] = {"issue": number, "user": user}
+    SUBMISSIONS.parent.mkdir(parents=True, exist_ok=True)
     SUBMISSIONS.write_text(json.dumps(dict(sorted(submissions.items())), indent=2) + "\n", encoding="utf-8")
 
     output("ok", "true")

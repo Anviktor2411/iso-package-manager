@@ -394,6 +394,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
   "use strict";
   const REPO = "Anviktor2411/iso-package-manager";
   const RAW = `https://raw.githubusercontent.com/${REPO}/main/themes/`;
+  const INDEX_URL = `https://raw.githubusercontent.com/${REPO}/main/docs/shop/index.json`;
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -572,7 +573,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
 
   async function loadShop() {
     try {
-      const idx = await (await fetch(RAW + "index.json", {cache: "no-cache"})).json();
+      const idx = await (await fetch(INDEX_URL, {cache: "no-cache"})).json();
       const got = await Promise.all((idx.themes || []).map(async e => {
         if (!/^[a-z0-9][a-z0-9._-]{0,63}\.ipmtheme\.json$/.test(e.file || "")) return null;
         try {
