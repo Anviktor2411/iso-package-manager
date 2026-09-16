@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "themes": [
+    {
+      "file": "catppuccin-mocha.ipmtheme.json",
+      "id": "catppuccin-mocha",
+      "name": "Catppuccin Mocha",
+      "author": "Catppuccin (palette) / community pack",
+      "version": "1.0.0",
+      "base": "modern-dark"
+    },
+    {
+      "file": "dracula.ipmtheme.json",
+      "id": "dracula",
+      "name": "Dracula",
+      "author": "Dracula Theme (palette) / community pack",
+      "version": "1.0.0",
+      "base": "modern-dark"
+    },
+    {
+      "file": "gruvbox-dark.ipmtheme.json",
+      "id": "gruvbox-dark",
+      "name": "Gruvbox Dark",
+      "author": "morhetz (palette) / community pack",
+      "version": "1.0.0",
+      "base": "modern-dark"
+    },
+    {
+      "file": "nord.ipmtheme.json",
+      "id": "nord",
+      "name": "Nord",
+      "author": "Arctic Ice Studio (palette) / community pack",
+      "version": "1.0.0",
+      "base": "modern-dark"
+    },
+    {
+      "file": "solarized-light.ipmtheme.json",
+      "id": "solarized-light",
+      "name": "Solarized Light",
+      "author": "Ethan Schoonover (palette) / community pack",
+      "version": "1.0.0",
+      "base": "default"
+    }
+  ]
+}

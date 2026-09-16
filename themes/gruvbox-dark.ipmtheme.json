@@ -1,0 +1,38 @@
+{
+  "$schema": "../theme-pack.schema.json",
+  "schema_version": 1,
+  "id": "gruvbox-dark",
+  "name": "Gruvbox Dark",
+  "author": "morhetz (palette) / community pack",
+  "version": "1.0.0",
+  "description": "Warm, retro, high-contrast dark theme with amber accents.",
+  "license": "MIT",
+  "homepage": "https://github.com/morhetz/gruvbox",
+  "base": "modern-dark",
+  "font_family": "Segoe UI",
+  "colors": {
+    "bg": "#282828",
+    "panel": "#3c3836",
+    "text": "#ebdbb2",
+    "muted": "#a89984",
+    "accent": "#fabd2f",
+    "accent_active": "#d79921",
+    "danger": "#fb4934",
+    "danger_active": "#cc241d",
+    "border": "#504945",
+    "selection": "#458588",
+    "tree_bg": "#3c3836",
+    "tree_heading_bg": "#504945",
+    "tree_heading_fg": "#ebdbb2",
+    "tab_bg": "#3c3836",
+    "tab_selected_bg": "#282828",
+    "accent_text": "#282828",
+    "selection_fg": "#ebdbb2"
+  },
+  "style": {
+    "ttk_theme": "clam",
+    "button_relief": "flat",
+    "disabled_bg": "#504945",
+    "disabled_fg": "#928374"
+  }
+}
