@@ -107,7 +107,7 @@ cmd_build() {
     --distpath dist --workpath build --specpath build \
     --hidden-import main --hidden-import ipm_cli --hidden-import ipm_ia \
     --hidden-import ipm_search --hidden-import ipm_windows --hidden-import ipm_winops \
-    --hidden-import ipm_http --hidden-import ipm_models --hidden-import ipm_utils \
+      --hidden-import ipm_http --hidden-import ipm_models --hidden-import ipm_utils --hidden-import ipm_themes \
     "${EXTRA[@]+"${EXTRA[@]}"}" "$ENTRY" \
     || die "build failed - scroll up for the PyInstaller error"
 
