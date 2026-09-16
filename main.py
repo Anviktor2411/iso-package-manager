@@ -48,11 +48,21 @@ from ipm_utils import (
     open_url_default,
     parse_apache_listing_for_links,
     parse_checksum_lines,
+    platform_label,
+    seven_zip_hint,
     sha256_file,
     ssl_context_for_https,
     which_7z,
 )
-from ipm_winops import get_mounted_drive_letter, mount_iso, open_explorer, run_powershell
+from ipm_winops import (
+    get_mount_point,
+    mount_backend,
+    mount_iso,
+    mount_supported,
+    open_explorer,
+    run_powershell,
+    unmount_iso,
+)
 from ipm_windows import (
     WINDOWS_SOURCES,
     is_windows_source,
@@ -77,6 +87,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "Scannen",
         "Stop": "Stopp",
         "Mount + Open": "Einbinden + Öffnen",
+        "Eject ISO": "ISO auswerfen",
         "Show Details": "Details anzeigen",
         "Extract": "Extrahieren",
         "Copy Path": "Pfad kopieren",
@@ -126,6 +137,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "Escanear",
         "Stop": "Detener",
         "Mount + Open": "Montar + abrir",
+        "Eject ISO": "Expulsar ISO",
         "Show Details": "Mostrar detalles",
         "Extract": "Extraer",
         "Copy Path": "Copiar ruta",
@@ -174,6 +186,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "Analyser",
         "Stop": "Arrêter",
         "Mount + Open": "Monter + ouvrir",
+        "Eject ISO": "Éjecter l'ISO",
         "Show Details": "Afficher les détails",
         "Extract": "Extraire",
         "Copy Path": "Copier le chemin",
@@ -222,6 +235,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "Сканировать",
         "Stop": "Стоп",
         "Mount + Open": "Смонтировать + открыть",
+        "Eject ISO": "Извлечь ISO",
         "Show Details": "Показать детали",
         "Extract": "Извлечь",
         "Copy Path": "Копировать путь",
@@ -270,6 +284,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "Verificar",
         "Stop": "Parar",
         "Mount + Open": "Montar + abrir",
+        "Eject ISO": "Ejetar ISO",
         "Show Details": "Mostrar detalhes",
         "Extract": "Extrair",
         "Copy Path": "Copiar caminho",
@@ -318,6 +333,7 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan": "扫描",
         "Stop": "停止",
         "Mount + Open": "挂载并打开",
+        "Eject ISO": "弹出 ISO",
         "Show Details": "显示详情",
         "Extract": "解压",
         "Copy Path": "复制路径",
@@ -357,19 +373,59 @@ _UI_TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 
+def _self_invocation_prefix() -> list[str] | None:
+    """argv prefix that re-runs this program, or None when it cannot be found.
+
+    Handles the three ways the app ships:
+
+    * a plain source tree          -> ``python /path/main.py``
+    * a PyInstaller onefile binary -> ``/path/ISO Package Manager``
+    * a zipapp (``.pyz``)          -> ``python /path/iso-package-manager.pyz``
+
+    The zipapp case is why ``__file__`` alone is not enough: inside a zip
+    archive it points at ``archive.pyz/main.py``, which is not a real file
+    on disk, so the helper process has to be launched through the archive
+    itself (``sys.argv[0]``).
+    """
+    if getattr(sys, "frozen", False):
+        # Single-file build: the executable is the entry point, the module
+        # path inside the bundle does not exist on disk.
+        return [sys.executable]
+
+    candidates: list[str] = []
+    try:
+        candidates.append(os.path.abspath(__file__))
+    except Exception:
+        pass
+    argv0 = (sys.argv[0] or "") if sys.argv else ""
+    if argv0 and not argv0.startswith("-"):
+        candidates.append(os.path.abspath(argv0))
+
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            return [sys.executable, cand]
+    return None
+
+
 def open_url_in_app(url: str, title: str = "Browser", ipc_path: str | None = None) -> bool:
     if webview is None:
         return False
 
     try:
-        args = [sys.executable, os.path.abspath(__file__), "--webview", url, "--title", title]
+        prefix = _self_invocation_prefix()
+        if prefix is None:
+            return False
+        args = prefix + ["--webview", url, "--title", title]
         if ipc_path:
             args.extend(["--ipc", ipc_path])
-        subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        kwargs: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            # Keep the helper process from flashing an extra console window.
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.Popen(args, **kwargs)
         return True
     except Exception:
         return False
@@ -378,7 +434,7 @@ def open_url_in_app(url: str, title: str = "Browser", ipc_path: str | None = Non
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ISO Package Manager")
+        self.title("ISO Package Manager V0.8")
         want_w, want_h = 980, 640
         try:
             want_w = max(720, min(want_w, self.winfo_screenwidth() - 80))
@@ -401,7 +457,7 @@ class App(tk.Tk):
         try:
             g = self._settings.get("geometry")
             if isinstance(g, str) and g.strip():
-                self.geometry(g)
+                self._restore_geometry(g)
         except Exception:
             pass
 
@@ -555,6 +611,7 @@ class App(tk.Tk):
         set_text("_btn_dupes", self._t("Find Duplicates"))
         set_text("_btn_extract", self._t("Extract"))
         set_text("_btn_copy", self._t("Copy Path"))
+        set_text("_btn_eject", self._t("Eject ISO"))
 
         set_text("_lbl_internet_header", self._t("Internet Sources"))
         set_text("_lbl_net_source", self._t("Source"))
@@ -1317,7 +1374,14 @@ class App(tk.Tk):
             self._settings["auto_verify"] = auto_verify
 
         try:
-            self._settings["geometry"] = str(self.geometry())
+            # A maximized/zoomed window reports the full screen size; keep the last
+            # normal size instead so the app does not re-open full screen every time.
+            state = str(self.state())
+        except Exception:
+            state = "normal"
+        try:
+            if state == "normal":
+                self._settings["geometry"] = str(self.geometry())
         except Exception:
             pass
 
@@ -1684,14 +1748,40 @@ class App(tk.Tk):
         self._btn_dupes = ttk.Button(actions, text=self._t("Find Duplicates"), command=self._find_duplicates_clicked)
         self._btn_extract = ttk.Button(actions, text=self._t("Extract"), command=self._extract_clicked)
         self._btn_copy = ttk.Button(actions, text=self._t("Copy Path"), command=self._copy_path_clicked)
+        self._btn_eject = ttk.Button(actions, text=self._t("Eject ISO"), command=self._eject_clicked)
 
         self._btn_mount_open.grid(row=0, column=0, padx=(0, 6))
         self._btn_details.grid(row=0, column=1, padx=(0, 6))
         self._btn_dupes.grid(row=0, column=2, padx=(0, 6))
         self._btn_extract.grid(row=0, column=3, padx=(0, 6))
-        self._btn_copy.grid(row=0, column=4)
+        self._btn_copy.grid(row=0, column=4, padx=(0, 6))
+        self._btn_eject.grid(row=0, column=5)
 
         self._set_actions_enabled(False)
+
+    def _restore_geometry(self, saved: str) -> str | None:
+        """Apply a saved "WxH+X+Y" string, clamped so it stays usable on screen.
+
+        Returns the geometry actually applied (None when the string is unusable).
+        """
+        text = str(saved or "").strip()
+        match = re.match(r"^(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?$", text)
+        if not match:
+            return None
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+        except Exception:
+            screen_w, screen_h = 1920, 1080
+        width = max(680, min(int(match.group(1)), max(680, screen_w - 40)))
+        height = max(460, min(int(match.group(2)), max(460, screen_h - 80)))
+        geometry = f"{width}x{height}"
+        if match.group(3) and match.group(4):
+            x = max(-width + 120, min(int(match.group(3)), max(0, screen_w - 120)))
+            y = max(0, min(int(match.group(4)), max(0, screen_h - 60)))
+            geometry += f"{x:+d}{y:+d}"
+        self.geometry(geometry)
+        return geometry
 
     @staticmethod
     def _wheel_units(event) -> int:
@@ -4658,7 +4748,14 @@ class App(tk.Tk):
 
     def _set_actions_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"
-        for b in (self._btn_mount_open, self._btn_details, getattr(self, "_btn_dupes", None), self._btn_extract, self._btn_copy):
+        for b in (
+            self._btn_mount_open,
+            self._btn_details,
+            getattr(self, "_btn_dupes", None),
+            self._btn_extract,
+            self._btn_copy,
+            getattr(self, "_btn_eject", None),
+        ):
             if not b:
                 continue
             b.configure(state=state)
@@ -4818,31 +4915,56 @@ class App(tk.Tk):
         if not iso:
             return
 
-        if not is_windows():
+        if not mount_supported():
             try:
                 open_path_default(iso.path)
-                self._set_status("Opened with default application")
+                self._set_status(f"Opened with default application ({platform_label()}: no mount backend)")
             except Exception as e:
                 messagebox.showerror("Error", f"Open failed: {e}")
             return
 
-        self._set_status("Mounting...")
+        self._set_status(f"Mounting ({mount_backend()})...")
         self._set_progress(None)
         self._set_actions_enabled(False)
 
         def worker():
             try:
                 mount_iso(iso.path)
-                letter = None
+                point = None
                 for _ in range(30):
-                    letter = get_mounted_drive_letter(iso.path)
-                    if letter:
+                    point = get_mount_point(iso.path)
+                    if point:
                         break
                     time.sleep(0.2)
 
-                self._work_q.put(("mount_done", (str(iso.path), letter), None))
+                self._work_q.put(("mount_done", (str(iso.path), point), None))
             except Exception as e:
                 self._work_q.put(("error", f"Mount failed: {e}", None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _eject_clicked(self):
+        """Unmount / eject a previously mounted ISO on any platform."""
+        iso = self._selected_iso()
+        if not iso:
+            return
+
+        if not mount_supported():
+            messagebox.showinfo(
+                "Eject ISO",
+                f"Ejecting is not supported on {platform_label()}.\n\nUnmount the image with your OS tools.",
+            )
+            return
+
+        self._set_status("Ejecting...")
+        self._set_actions_enabled(False)
+
+        def worker():
+            try:
+                ok = unmount_iso(iso.path)
+                self._work_q.put(("eject_done", (str(iso.path), ok), None))
+            except Exception as e:
+                self._work_q.put(("error", f"Eject failed: {e}", None))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4982,7 +5104,7 @@ class App(tk.Tk):
         if not seven:
             messagebox.showerror(
                 "7-Zip not found",
-                "Extract requires 7-Zip in PATH (7z.exe).\n\nInstall 7-Zip, then restart the app.",
+                f"Extract requires 7-Zip in PATH ({seven_zip_hint()}).\n\nInstall 7-Zip, then restart the app.",
             )
             return
 
@@ -5116,16 +5238,24 @@ class App(tk.Tk):
                     self._progress["value"] = 0
                     self._set_actions_enabled(self._selected_iso() is not None)
 
-                    iso_path, letter = payload
-                    if letter:
-                        self._set_status(f"Mounted at {letter}")
-                        open_explorer(letter + "\\")
+                    iso_path, point = payload
+                    if point:
+                        self._set_status(f"Mounted at {point}")
+                        open_explorer(point)
                     else:
-                        self._set_status("Mounted (drive letter not found)")
+                        self._set_status("Mounted (mount point not found)")
                         messagebox.showinfo(
                             "Mounted",
-                            "Mounted the ISO, but could not determine drive letter automatically.\n\nYou can open it from File Explorer.",
+                            "Mounted the ISO, but could not determine the mount point automatically.\n\n"
+                            "Open it from your file manager.",
                         )
+                elif kind == "eject_done":
+                    self._set_actions_enabled(self._selected_iso() is not None)
+                    iso_path, ok = payload
+                    if ok:
+                        self._set_status("ISO ejected")
+                    else:
+                        self._set_status("ISO was not mounted")
                 elif kind == "extract_done":
                     self._progress.stop()
                     self._progress.configure(mode="determinate")

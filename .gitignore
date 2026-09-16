@@ -31,3 +31,11 @@ Thumbs.db
 # Tkinter / UI
 *.tk
 
+# Build output
+dist/
+build/
+*.spec
+
+# Local test/probe files
+poc_*_tmp.py
+*_tmp.txt

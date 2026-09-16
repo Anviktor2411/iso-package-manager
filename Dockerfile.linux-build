@@ -1,0 +1,42 @@
+# Build a native Linux executable for ISO Package Manager from any host that
+# has Docker - including Windows, where PyInstaller cannot cross-compile.
+#
+#   docker build -f Dockerfile.linux-build -t ipm-linux-builder:22.04 .
+#   docker run --rm -v "$PWD:/src" -e HOME=/tmp ipm-linux-builder:22.04 ./build_linux.sh all
+#
+# or just run ./build_linux_docker.sh (wrapper that does both and fixes
+# ownership of the artifacts it leaves in ./dist).
+#
+# Ubuntu 22.04 is deliberate: it ships glibc 2.35, so the resulting binary runs
+# on Ubuntu 22.04+ / Debian 12+ / current Fedora, Mint, Pop!_OS and friends.
+# Building on a newer base produces a binary that only starts on that newer
+# glibc, which is the usual reason a "Linux executable" fails with
+# "version `GLIBC_2.38' not found".
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-tk \
+        python3-pip \
+        python3-venv \
+        binutils \
+        dpkg-dev \
+        file \
+        ca-certificates \
+        xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyInstaller + certifi are baked in so ./build_linux.sh never has to hit the
+# network for them mid-build.
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir pyinstaller certifi
+
+WORKDIR /src
+
+# Default to the full set: .pyz + native onefile + .deb
+CMD ["./build_linux.sh", "all"]

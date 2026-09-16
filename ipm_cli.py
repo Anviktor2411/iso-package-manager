@@ -5,6 +5,7 @@ Command line front-end for the same engines the Tk GUI uses:
 
 * ``ipm_search.archive_search_all``  - deterministic distro/BSD/archive.org lookup
 * ``ipm_search.ia_iso_search``       - Internet Archive catalogue (non-Windows families)
+* ``ipm_ia.ia_generic_search``       - "Archive.org (any ISO)" catch-all engine for uncurated systems
 * ``ipm_search.windows_iso_search``  - Windows release medias (Windows only)
 * ``ipm_search.web_search_iso_urls`` - optional web-engine fallback (DuckDuckGo/SearxNG/Google)
 
@@ -14,8 +15,15 @@ Examples
     python ipm_cli.py search ubuntu
     python ipm_cli.py search TempleOS --level 1 -n 5
     python ipm_cli.py search "plan 9" --json
+    python ipm_cli.py search serenityos
     python ipm_cli.py fetch "bazzite" -d D:\\isos -y
     python ipm_cli.py url debian
+
+Any operating system, even one this tool has no curated catalogue for, can be
+searched through the generic archive.org engine::
+
+    python ipm_cli.py search kolibri -s "Archive.org (any ISO)"
+    python ipm_cli.py search "windows 2000" -s "Archive.org (any ISO)" -n 10
 """
 
 from __future__ import annotations
@@ -28,7 +36,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from ipm_ia import IA_GENERIC_LABEL, IA_SOURCES, LICENSE_NOTE, ia_iso_search, is_ia_source
+from ipm_ia import (
+    IA_GENERIC_LABEL,
+    IA_SOURCES,
+    LICENSE_NOTE,
+    ia_generic_search,
+    ia_iso_search,
+    is_ia_source,
+)
 from ipm_models import RemoteIsoItem
 from ipm_search import (
     ARCHIVE_SPECS,
@@ -111,6 +126,7 @@ def _source_kind(query: str) -> str:
 def search_items(
     query: str,
     *,
+    source: str = "",
     level: int = 0,
     limit: int = DEFAULT_LIMIT,
     web: str = "",
@@ -118,13 +134,34 @@ def search_items(
     google_key: str = "",
     google_cx: str = "",
 ) -> list[RemoteIsoItem]:
-    """Return ISO candidates for ``query`` using the same fallback chain as the GUI."""
+    """Return ISO candidates for ``query`` using the same fallback chain as the GUI.
+
+    ``source`` pins one source by name, exactly like selecting the matching row
+    in the GUI: the generic label "Archive.org (any ISO)" runs the unfiltered
+    archive.org search over the free-text ``query`` (so *any* OS, curated or not,
+    can be looked up), a family name uses that family's own relevance rules, and
+    anything else is treated as the query itself.
+    """
     query = (query or "").strip()
-    if not query:
+    source = (source or "").strip()
+    if not query and not source:
         return []
 
     want = -1 if limit <= 0 else limit
     items: list[RemoteIsoItem] = []
+
+    if source:
+        if source == IA_GENERIC_LABEL:
+            try:
+                items = list(ia_generic_search(query, level, max_items=want if want > 0 else -1))
+            except Exception as exc:  # pragma: no cover - network dependent
+                _err(f"Archive.org lookup failed: {exc}")
+                items = []
+            return items
+        query = build_query_from_source(source)
+
+    if not query:
+        return []
 
     if is_windows_source(query):
         try:
@@ -193,8 +230,10 @@ def _print_table(items: list[RemoteIsoItem], *, show_index: bool = True) -> None
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    label = args.query or args.source
     items = search_items(
         args.query,
+        source=args.source or "",
         level=args.level,
         limit=args.limit,
         web=args.web,
@@ -208,7 +247,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_OK if items else EXIT_NO_RESULTS
 
     if not items:
-        _err(f"no ISO found for '{args.query}'.")
+        _err(f"no ISO found for '{label}'.")
         if is_ia_source(args.query):
             print(warn("note: ") + LICENSE_NOTE, file=sys.stderr)
         else:
@@ -217,6 +256,14 @@ def cmd_search(args: argparse.Namespace) -> int:
                 + "try --level 1 for a deeper catalogue scan, or --web duckduckgo as a fallback.",
                 file=sys.stderr,
             )
+            if not args.source:
+                print(
+                    warn("hint: ")
+                    + 'for an uncurated system add: -s "'
+                    + IA_GENERIC_LABEL
+                    + '"',
+                    file=sys.stderr,
+                )
         return EXIT_NO_RESULTS
 
     print(bold(f"{len(items)} result(s) for '{args.query}'"))
@@ -228,6 +275,7 @@ def cmd_url(args: argparse.Namespace) -> int:
     """Print only the best matching URL (script friendly)."""
     items = search_items(
         args.query,
+        source=args.source or "",
         level=args.level,
         limit=max(1, args.index),
         web=args.web,
@@ -246,6 +294,7 @@ def cmd_url(args: argparse.Namespace) -> int:
 def cmd_info(args: argparse.Namespace) -> int:
     items = search_items(
         args.query,
+        source=args.source or "",
         level=args.level,
         limit=max(1, args.index),
         web=args.web,
@@ -259,7 +308,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
     idx = min(max(1, args.index), len(items)) - 1
     item = items[idx]
-    kind = _source_kind(args.query)
+    kind = _source_kind(args.source or args.query)
 
     size_txt = "unknown"
     if args.head:
@@ -357,6 +406,7 @@ def _download(item: RemoteIsoItem, target_dir: Path, *, assume_yes: bool) -> int
 def cmd_fetch(args: argparse.Namespace) -> int:
     items = search_items(
         args.query,
+        source=args.source or "",
         level=args.level,
         limit=max(1, args.index),
         web=args.web,
@@ -411,14 +461,25 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ipm_cli.py",
+        prog=os.path.basename(sys.argv[0]) or "ipm_cli.py",
         description="ISO Package Manager - terminal edition.",
         epilog="Sources are community preserved images; verify checksums before use.",
     )
     sub = parser.add_subparsers(dest="command")
 
     def add_common(p: argparse.ArgumentParser, *, with_web: bool = True) -> None:
-        p.add_argument("query", help="OS name or free-text query, e.g. ubuntu, TempleOS, 'plan 9'")
+        p.add_argument(
+            "query",
+            nargs="?",
+            default="",
+            help="OS name or free-text query, e.g. ubuntu, TempleOS, 'plan 9' (optional when --source is given)",
+        )
+        p.add_argument(
+            "-s",
+            "--source",
+            default="",
+            help='pin one source by name; use "' + IA_GENERIC_LABEL + '" to search any OS on archive.org',
+        )
         p.add_argument("-l", "--level", type=int, default=0, help="catalogue depth (same as the GUI 'Load more'), default 0")
         p.add_argument("-i", "--index", type=int, default=1, help="1-based result index to use, default 1")
         p.add_argument("-n", "--limit", type=int, default=DEFAULT_LIMIT, help=f"max results, default {DEFAULT_LIMIT}")
@@ -461,6 +522,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
         parser.print_help()
+        return EXIT_USAGE
+    if args.command != "list" and not (getattr(args, "query", "") or getattr(args, "source", "")):
+        _err('give a query, or pin a source with -s (e.g. -s "' + IA_GENERIC_LABEL + '").')
         return EXIT_USAGE
     try:
         return int(args.func(args))

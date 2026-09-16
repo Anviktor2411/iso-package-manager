@@ -53,7 +53,8 @@ def sha256_file(path: Path, progress_cb=None, stop_flag=None) -> str:
 
 
 def which_7z() -> str | None:
-    for exe in ("7z.exe", "7za.exe", "7zr.exe", "7z"):
+    """Locate a 7-Zip CLI. Names differ per OS (7z.exe on Windows, 7z/7zz elsewhere)."""
+    for exe in ("7z.exe", "7za.exe", "7zr.exe", "7z", "7zz", "7za", "7zr"):
         p = shutil.which(exe)
         if p:
             return p
@@ -64,15 +65,64 @@ def is_windows() -> bool:
     return sys.platform.startswith("win")
 
 
+def is_linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
+def is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def platform_label() -> str:
+    """Human readable OS name for status bars, logs and error dialogs."""
+    if is_windows():
+        return "Windows"
+    if is_macos():
+        return "macOS"
+    if is_linux():
+        return "Linux"
+    return sys.platform
+
+
+def seven_zip_hint() -> str:
+    """The 7-Zip executable name a user has to install on this OS."""
+    return "7z.exe" if is_windows() else "7z"
+
+
+def _linux_openers() -> list[list[str]]:
+    candidates = ("xdg-open", "gio", "kde-open6", "kde-open5", "exo-open", "caja", "dolphin")
+    out: list[list[str]] = []
+    for name in candidates:
+        found = shutil.which(name)
+        if not found:
+            continue
+        out.append([found, "open", found] if name == "gio" else [found])
+    return out
+
+
 def open_path_default(path: str | Path) -> None:
+    """Open a file/URL/folder with the desktop default handler on any OS."""
     p = str(path)
     if is_windows():
         os.startfile(p)  # type: ignore[attr-defined]
         return
-    if sys.platform == "darwin":
+    if is_macos():
         subprocess.Popen(["open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
-    subprocess.Popen(["xdg-open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    attempts = _linux_openers()
+    if not attempts:
+        raise RuntimeError(
+            "No desktop opener found (install xdg-utils) - open the path manually: " + p
+        )
+    last_err: Exception | None = None
+    for cmd in attempts:
+        try:
+            subprocess.Popen([*cmd, p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except Exception as exc:  # try the next opener
+            last_err = exc
+    raise RuntimeError(f"Could not open {p}: {last_err}")
 
 
 def open_url_default(url: str) -> None:

@@ -43,7 +43,6 @@ import re
 import threading
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
 
 from ipm_http import http_get_text
 from ipm_models import RemoteIsoItem
@@ -62,6 +61,9 @@ _IA_DOWNLOAD_URL = "https://archive.org/download/"
 # ipm_windows' (300 MB) because Alpine/Haiku/ReactOS images are legitimately
 # small; obvious fragments and stray files are still dropped.
 _MIN_ISO_BYTES = 100 * 1024 * 1024
+
+# Catalogue rows read by the generic "any ISO" browse listing (no search term).
+_GENERIC_MIN_ROWS = 25
 
 _MB = 1024 * 1024
 
@@ -252,8 +254,8 @@ IA_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
     # ---- Retro, hobby and historic systems -------------------------------
     ("TempleOS", ("templeos", "temple os"), ("templeos", "temple os")),
-    ("SerenityOS", ("serenityos", "serenity os"), ("serenityos",)),
-    ("KolibriOS", ("kolibrios", "kolibri os"), ("kolibrios",)),
+    ("SerenityOS", ("serenityos", "serenity os", "serenity"), ("serenityos", "serenity")),
+    ("KolibriOS", ("kolibrios", "kolibri os", "kolibri"), ("kolibrios", "kolibri")),
     ("MenuetOS", ("menuetos", "menuet os"), ("menuetos",)),
     ("Syllable", ("syllable", "syllableos", "syllable desktop"), ("syllable",)),
     ("Plan 9", ("plan 9", "plan9", "9front"), ("plan9", "plan 9", "9front")),
@@ -532,6 +534,9 @@ _IA_EXCLUDE: dict[str, tuple[str, ...]] = {
     "Syllable": ("syllable division", "syllable stress"),
     "Solus": ("solusvm", "solus os project bsd"),
     "Puppy Linux": ("puppy linux wallpaper", "puppy linux screenshots"),
+    # "serenity" is a common word and fake "Windows Serenity Build ..." images
+    # are common in the catalogue.
+    "SerenityOS": ("windows", "microsoft"),
 }
 
 _EXCLUDE_RE_CACHE: dict[str, re.Pattern] = {}
@@ -676,10 +681,12 @@ def _ia_search(terms, rows: int, *, mediatype: str = "software", iso_format: boo
     ]
     url = _IA_SEARCH_URL + "?" + urllib.parse.urlencode(params)
     try:
-        data = _get_json(url, timeout=30.0)
+        data = _run_bounded(lambda: _get_json(url, timeout=30.0), _SEARCH_BUDGET, None)
     except Exception:
         return []
-    docs = ((data or {}).get("response") or {}).get("docs") or []
+    if not isinstance(data, dict):
+        return []
+    docs = (data.get("response") or {}).get("docs") or []
     return [d for d in docs if isinstance(d, dict) and d.get("identifier")]
 
 
@@ -691,10 +698,14 @@ def _ia_docs(terms, rows: int) -> list[dict]:
     would silently miss them.  The relaxed pass still requires the real file to
     end in ``.iso`` (enforced in :func:`_ia_item_isos`).
     """
-    docs = _ia_search(terms, rows)
+    docs = _run_bounded(lambda: _ia_search(terms, rows), _SEARCH_BUDGET, []) or []
     if docs:
         return docs
-    return _ia_search(terms, rows, mediatype="(software OR data OR other)", iso_format=False)
+    return _run_bounded(
+        lambda: _ia_search(terms, rows, mediatype="(software OR data OR other)", iso_format=False),
+        _SEARCH_BUDGET,
+        [],
+    ) or []
 
 
 def _min_bytes(label: str) -> int:
@@ -753,6 +764,26 @@ _ALT_RE = re.compile(
     r"docker|container|virtualbox|vmware|qemu|vhd|vhdx|ova|upgrade|"
     r"update|source|src|checksums?|torrent|magnet|old|legacy)\b"
 )
+
+# The generic "Archive.org (any ISO)" listing has no family name to match against,
+# so a candidate must at least look like operating-system media.  Without this
+# gate the catalogue happily returns game discs, driver CDs and application
+# media (a "GTA San Andreas PC.iso" showed up as item #1 in live testing).
+_OS_HINT_RE = re.compile(
+    r"(?i)\b(ubuntu|debian|fedora|centos|red ?hat|rhel|rocky|alma ?linux|arch ?linux|"
+    r"manjaro|linux ?mint|opensuse|suse|slackware|gentoo|alpine|kali|parrot|nixos|"
+    r"pop!_?os|zorin|elementary|deepin|garuda|endeavour|void ?linux|mx ?linux|"
+    r"raspbian|raspberry ?pi|linux|windows|win ?(?:xp|vista|7|8|10|11)|freebsd|"
+    r"openbsd|netbsd|dragonfly|mac ?os|macos|os ?x|solaris|illumos|haiku|reactos|"
+    r"freedos|temple ?os|kolibri|menuet|serenity ?os|plan ?9|minix|os ?/?2|"
+    r"aros|amiga|morphos|risc ?os|irix|hp ?-?ux|aix|open ?vms|be ?os|syllable|"
+    r"android|chrome ?os|proxmox|truenas|pfsense|opnsense|openwrt|system ?rescue|"
+    r"gparted|clonezilla|rescuezilla|batocera|lakka|recalbox|retropie|libreelec|"
+    r"bazzite|cachyos|nobara|steam ?os|dietpi|freedos|distro|installer|setup|"
+    r"installation (?:media|disc|disk|dvd|cd)|operating system|"
+    r"live ?(?:cd|dvd|usb)|boot ?(?:cd|dvd|usb)|recovery (?:disc|disk|media))\b"
+)
+
 
 # Looks like a versioned, arch-qualified installer name rather than "some.iso".
 _OFFICIAL_HINT_RE = re.compile(
@@ -826,12 +857,15 @@ _FILENAME_HINTS: dict[str, re.Pattern] = {
     "OpenWrt": re.compile(r"(?i)openwrt|lede"),
     "Puppy Linux": re.compile(r"(?i)puppy"),
     "Tiny Core Linux": re.compile(r"(?i)tiny ?core|tinycore"),
+    # Generic "any ISO" listing: no family to match, so an operating-system hint
+    # is required (see _OS_HINT_RE).
+    IA_GENERIC_LABEL: _OS_HINT_RE,
 }
 
 # Labels whose archive.org query is fuzzy enough to drag in neighbouring
 # families; ``_matches_target`` already rejects those, but a title-only check
 # keeps obvious mismatches out even when the file name is generic.
-_STRICT_MATCH_LABELS = frozenset({"OS/2", "Plan 9", "Syllable", "Solus", "MINIX"})
+_STRICT_MATCH_LABELS = frozenset({"OS/2", "Plan 9", "Syllable", "Solus", "MINIX", "SerenityOS"})
 
 
 def _media_ok(label: str, identifier: str, filename: str, title: str = "") -> bool:
@@ -903,15 +937,85 @@ def _result(identifier: str, name: str, size: int, label: str, known: dict, limi
     return bool(limit > 0 and len(out) >= limit)
 
 
-def _fetch_items(docs: list[dict], min_bytes: int) -> list[tuple[dict, list[dict]]]:
-    def fetch(doc: dict) -> tuple[dict, list[dict]]:
-        return doc, _ia_item_isos(doc.get("identifier"), min_bytes)
+_ITEM_BUDGET = 40.0
+# One advancedsearch.php round trip (the body can trickle for a long time).
+_SEARCH_BUDGET = 45.0
+# Ceiling for a whole family lookup across all of its catalogue labels.
+_TOTAL_BUDGET = 90.0
 
-    try:
-        with ThreadPoolExecutor(max_workers=_ITEM_WORKERS) as pool:
-            return list(pool.map(fetch, docs))
-    except Exception:
-        return []
+
+def _run_bounded(fn, timeout: float, default):
+    """Call ``fn()`` in a daemon thread and give up after ``timeout`` seconds.
+
+    ``urllib``'s socket timeout only fires when the peer stops sending data
+    altogether - archive.org sometimes trickles a response slowly enough to keep
+    the socket alive indefinitely.  The worker thread is a daemon, so an
+    abandoned request can never keep the interpreter alive at shutdown either.
+    """
+    box: dict = {}
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="ipm-ia-bounded", daemon=True).start()
+    if done.wait(max(0.1, float(timeout))):
+        return box.get("value", default)
+    return default
+
+
+def _fetch_items(
+    docs: list[dict],
+    min_bytes: int,
+    budget: float = _ITEM_BUDGET,
+) -> list[tuple[dict, list[dict]]]:
+    """Fetch every item's file list, giving up after ``budget`` seconds.
+
+    archive.org occasionally throttles or trickles a single metadata response;
+    waiting for it would stall the whole search, so the slow items are simply
+    skipped (a later refresh retries them).  The workers are daemon threads, so
+    an abandoned request never blocks process exit.
+    """
+    results: list[tuple[dict, list[dict]]] = []
+    lock = threading.Lock()
+    pending = list(docs)
+    stop = threading.Event()
+
+    def worker() -> None:
+        while not stop.is_set():
+            with lock:
+                if not pending:
+                    return
+                doc = pending.pop(0)
+            try:
+                files = _ia_item_isos(doc.get("identifier"), min_bytes)
+            except Exception:
+                continue
+            with lock:
+                results.append((doc, files))
+
+    workers = max(1, min(_ITEM_WORKERS, len(docs) or 1))
+    threads = [
+        threading.Thread(target=worker, name="ipm-ia-item", daemon=True)
+        for _ in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+
+    deadline = time.monotonic() + max(0.0, float(budget))
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    stop.set()
+    with lock:
+        return list(results)
 
 
 # --------------------------------------------------------------------------
@@ -953,11 +1057,14 @@ def ia_iso_search(
     limit = max_items if max_items and max_items > 0 else -1
     out: list[RemoteIsoItem] = []
     known: dict[str, int] = {}
+    deadline = time.monotonic() + _TOTAL_BUDGET
 
     for label in targets:
+        if time.monotonic() >= deadline:
+            break
         terms = _IA_TERMS.get(label) or (label.lower(),)
         min_bytes = _min_bytes(label)
-        docs = _ia_docs(terms, rows)
+        docs = _run_bounded(lambda: _ia_docs(terms, rows), _SEARCH_BUDGET, []) or []
         if not docs:
             continue
         docs = docs[:rows]
@@ -1012,10 +1119,16 @@ def ia_generic_search(
             if named:
                 return ia_iso_search(query, archive_level, max_items=max_items)
 
-        rows = _rows_for_level(archive_level)
-        limit = max_items if max_items and max_items > 0 else -1
         term = _norm_text(query)
-        docs = _ia_docs((term,) if term else (), rows)
+        rows = _rows_for_level(archive_level)
+        if not term:
+            # Browsing with no search term: read more catalogue items so the
+            # operating-system relevance gate still leaves a useful list.
+            rows = max(rows, _GENERIC_MIN_ROWS)
+        limit = max_items if max_items and max_items > 0 else -1
+        docs = _run_bounded(
+            lambda: _ia_docs((term,) if term else (), rows), _SEARCH_BUDGET, []
+        ) or []
         if not docs:
             return []
         docs = docs[:rows]
