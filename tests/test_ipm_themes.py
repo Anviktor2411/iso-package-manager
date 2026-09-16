@@ -24,6 +24,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -436,6 +437,105 @@ class TestSearchPaths(unittest.TestCase):
                     os.environ.pop("IPM_THEMES_DIR", None)
                 else:
                     os.environ["IPM_THEMES_DIR"] = previous
+
+
+class TestArchivePacks(unittest.TestCase):
+    """Packs inside a ``.pyz`` must be found, read and reported - never crash.
+
+    A zipapp sets ``__file__`` to ``<archive>.pyz/ipm_themes.py``, so the bundled
+    ``themes`` folder is not a real directory. Everything the app does with a
+    folder has to keep working on those pseudo-paths.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="ipm-archive-")
+        self.addCleanup(self._tmp.cleanup)
+        self.folder = Path(self._tmp.name)
+        self.archive = self.folder / "fake-app.pyz"
+        pack = write_pack(self.folder / "source" / "nord.ipmtheme.json", name="Nord", id="nord")
+        body = pack.read_text(encoding="utf-8")
+        with zipfile.ZipFile(self.archive, "w") as handle:
+            handle.writestr("__main__.py", "print('hi')\n")
+            handle.write(pack, "themes/nord.ipmtheme.json")
+            handle.writestr("themes/notes.txt", "not a theme\n")
+            handle.writestr("themes/deeper/hidden.ipmtheme.json", body)
+            handle.writestr("other/stray.ipmtheme.json", body)
+        self.inside = self.archive / "themes"
+
+    def test_finds_only_top_level_packs_inside_the_archive(self):
+        found = T.iter_pack_files([self.inside])
+        self.assertEqual([p.name for p in found], ["nord.ipmtheme.json"])
+
+    def test_member_paths_keep_pointing_at_the_archive(self):
+        found = T.iter_pack_files([self.inside])[0]
+        self.assertEqual(Path(str(found).split(".pyz")[0] + ".pyz"), self.archive)
+        self.assertIn("themes/nord.ipmtheme.json", str(found).replace("\\", "/"))
+
+    def test_a_folder_that_does_not_exist_yields_nothing(self):
+        self.assertEqual(T.iter_pack_files([self.folder / "nope" / "themes"]), [])
+
+    def test_a_directory_named_like_an_archive_is_read_normally(self):
+        decoy = self.folder / "looks-like.pyz"
+        write_pack(decoy / "themes" / "nord.ipmtheme.json", name="Nord", id="nord")
+        found = T.iter_pack_files([decoy / "themes"])
+        self.assertEqual([p.name for p in found], ["nord.ipmtheme.json"])
+
+    def test_is_pack_member_truth_table(self):
+        self.assertTrue(T.is_pack_member(self.inside / "nord.ipmtheme.json"))
+        self.assertFalse(T.is_pack_member(self.inside / "ghost.ipmtheme.json"))
+        self.assertFalse(T.is_pack_member(self.inside / "notes.txt"))
+        self.assertFalse(T.is_pack_member(self.folder / "plain.ipmtheme.json"))
+
+    def test_load_pack_file_reads_the_member(self):
+        theme = T.load_pack_file(self.inside / "nord.ipmtheme.json")
+        self.assertEqual(theme.id, "nord")
+        self.assertEqual(theme.name, "Nord")
+        self.assertFalse(theme.is_builtin)
+        self.assertFalse(theme.path.is_file())
+
+    def test_source_names_the_archive(self):
+        theme = T.load_pack_file(self.inside / "nord.ipmtheme.json")
+        self.assertIn("fake-app.pyz", theme.source)
+        self.assertIn("themes/nord.ipmtheme.json", theme.source.replace("\\", "/"))
+
+    def test_load_pack_file_on_a_missing_member_raises(self):
+        with self.assertRaises(T.ThemeError):
+            T.load_pack_file(self.inside / "ghost.ipmtheme.json")
+
+    def test_load_themes_lists_the_bundled_pack(self):
+        registry = T.load_themes([self.inside])
+        self.assertEqual([t.id for t in registry.packs()], ["nord"])
+        self.assertEqual(registry.problems, [])
+        self.assertEqual(registry.dirs, [self.inside])
+
+    def test_style_kwargs_from_a_bundled_pack_are_complete(self):
+        theme = T.load_pack_file(self.inside / "nord.ipmtheme.json")
+        kwargs = T.to_style_kwargs(theme)
+        for key in T.COLOR_KEYS:
+            self.assertIn(key, kwargs)
+        for key in T.STYLE_KEYS:
+            self.assertIn(key, kwargs)
+
+    def test_a_broken_member_is_a_problem_not_a_crash(self):
+        with zipfile.ZipFile(self.archive, "a") as handle:
+            handle.writestr("themes/broken.ipmtheme.json", "{not json")
+        registry = T.load_themes([self.inside])
+        self.assertEqual([t.id for t in registry.packs()], ["nord"])
+        self.assertEqual(len(registry.problems), 1)
+        self.assertTrue(registry.problems[0].strip())
+
+    def test_a_real_folder_beats_the_archive_copy(self):
+        real = self.folder / "real-themes"
+        write_pack(real / "nord.ipmtheme.json", name="Nord on disk", id="nord")
+        registry = T.load_themes([real, self.inside])
+        self.assertEqual([t.id for t in registry.packs()], ["nord"])
+        self.assertEqual(registry.packs()[0].name, "Nord on disk")
+        self.assertTrue(any("duplicate id" in p for p in registry.problems), registry.problems)
+
+    def test_container_helpers_describe_this_checkout(self):
+        self.assertEqual(T.container_dir(), ROOT)
+        self.assertEqual(T.app_theme_dir(), THEMES_DIR)
+        self.assertIsNone(T.bundled_theme_dir())
 
 
 class TestAuthoring(unittest.TestCase):
