@@ -226,6 +226,6 @@ case "${1:-build}" in
   install)  cmd_install ;;
   deb)      cmd_deb ;;
   clean)    cmd_clean ;;
-  -h|--help|help) sed -n '2,14p' "$0" ;;
+  -h|--help|help) sed -n '2,11p' "$0" ;;
   *) die "unknown target '$1' (use: build | pyz | all | install | deb | clean)" ;;
 esac
