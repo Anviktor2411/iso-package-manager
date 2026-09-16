@@ -290,15 +290,6 @@ Environment variables (optional):
   - **Load more** widens the catalogue search for more (older) builds.
   - The archive copies are user-contributed. Verify the SHA-256 of a downloaded ISO against Microsoft's official hash list before installing, and note that installing Windows still requires a valid licence key.
 
-- **Windows Server sources**
-  - Pick **Category: Windows Server** and choose a release (`Windows Server 2025`, `Windows Server 2022`, `Windows Server 2019`, `Windows Server 2016`, `Windows Server 2012 R2`, `Windows Server 2012`, `Windows Server 2008 R2`) or `Windows Server (all versions)` for the whole line, newest first.
-  - Server releases are also reachable from **Category: Windows** (and **All**); typing `windows server`, `win server` or a specific build such as `windows server 2012 r2` in **Web Search** lists them too. Rows are tagged `[Srv 2025]`, `[Srv 2022]`, `[Srv 2019]`, `[Srv 2016]`, `[Srv 2012 R2]`, `[Srv 2012]` or `[Srv 2008 R2]`.
-  - Current releases (2016 and newer) resolve from Microsoft's Evaluation Center media and the Internet Archive; retired releases (2012 R2 and older) come from archive copies, which is why 2008 R2 returns evaluation (GRMSX*) and volume-licence kits rather than retail discs.
-  - Server results are filtered the same way as client media, plus two server-specific guards: desktop client discs are kept out of Server lists (a Windows 7 disc that shares an archive item with a 2008 R2 disc no longer shows up under `Windows Server 2008 R2`), and non-OS server products are excluded (`SQL Server`, `MSSQL`, `Exchange Server`, `SharePoint`, `Lync Server`, `System Center`, `BizTalk`, `MultiPoint Server`). Hyper-V Server is still listed, since it is a Windows Server install image.
-  - Server 2012 and 2012 R2 share one base title, so R2 media is reported under `Windows Server 2012 R2` and never under `Windows Server 2012`.
-  - **Open Source Page** goes to Microsoft's Evaluation Center for current Server releases and to the Internet Archive search for retired ones.
-  - Server media is for learning and lab use. Install only in environments you are licensed and authorised to run, and verify hashes before use.
-
 - **Multi-download**
   - Select multiple rows in the ISO list (Ctrl/Shift) and click **Download**.
   - If multiple items are selected, the app will ask for a **target folder** and download all selected ISOs into it.
