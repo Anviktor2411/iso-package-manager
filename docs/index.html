@@ -325,6 +325,17 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
             <label>Homepage <input type="text" id="fHome" maxlength="200" placeholder="https://…"></label>
             <label>Min app version <input type="text" id="fMinApp" maxlength="20" placeholder="0.9"></label>
           </div>
+          <div class="fields">
+            <div>
+              <span class="note"><b>Screenshot</b> – the picture shown on your theme's card in the shop. PNG, JPG or WebP, up to 3 MB. It travels with the theme to the upload step.</span>
+              <div class="btnrow" style="margin-top:8px">
+                <label class="btn" for="edShot">Add a picture…</label>
+                <button class="btn" id="edShotRm" hidden>Remove picture</button>
+              </div>
+              <input type="file" id="edShot" accept="image/png,image/jpeg,image/webp" hidden>
+              <div class="thumbs" id="edThumb" style="grid-template-columns:1fr;margin-top:10px"></div>
+            </div>
+          </div>
         </div>
 
         <div class="tabpanel" id="tColors" hidden>
@@ -483,6 +494,8 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       for (const k of Object.keys(col)) if (!REQUIRED.includes(k) && !OPTIONAL.includes(k)) warnings.push(`Unknown colour key "${k}".`);
     }
     if (p.author != null && (typeof p.author !== "string" || p.author.length > 120)) errors.push('"author" is too long (max 120).');
+    else if (typeof p.author !== "string" || !p.author.trim()) errors.push('"author" is required: fill in Author so people can credit you (the bot runs --strict and rejects an empty author).');
+    if (typeof p.license !== "string" || !p.license.trim()) errors.push('"license" is required: pick a license so others know how they may reuse your palette.');
     if (p.description != null && (typeof p.description !== "string" || p.description.length > 400)) errors.push('"description" is too long (max 400).');
     if (p.font_family != null && (typeof p.font_family !== "string" || p.font_family.length > 80)) errors.push('"font_family" is too long (max 80).');
     if (p.homepage != null && !(typeof p.homepage === "string" && /^https?:\/\/\S{3,200}$/.test(p.homepage))) errors.push('"homepage" must be an http(s) link.');
@@ -500,6 +513,9 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     if (!errors.length) {
       const c = resolve(p).colors;
       if (expand(col.accent) === expand(col.bg)) warnings.push("accent equals bg: buttons become invisible.");
+      const bp = (BASES[p.base] || {}).colors || {};
+      const sameAsBase = [...REQUIRED, ...OPTIONAL].every(k => col[k] == null || !bp[k] || expand(col[k]) === expand(bp[k]));
+      if (sameAsBase && !p.font_family) errors.push("Change at least one colour: a pack identical to its base theme is rejected.");
       if (c.panel === c.bg && c.bg === c.border) warnings.push("panel, bg and border are identical.");
       const pairs = [["text", "bg", 4.5], ["text", "panel", 4.5], ["text", "tree_bg", 4.5], ["tree_heading_fg", "tree_heading_bg", 4.5], ["muted", "bg", 3], ["accent_text", "accent", 3], ["selection_fg", "selection", 3]];
       for (const [fg, bg, min] of pairs) {
@@ -848,8 +864,14 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     errors.forEach(e => rows.push(["bad", e]));
     warnings.filter(w => !/^Contrast/.test(w)).forEach(w => rows.push(["warn", w]));
     if (!errors.length && !warnings.length) rows.push(["ok", "Pack is valid"]);
+    const blocking = warnings.filter(w => !/^Unknown/.test(w));
+    if (!errors.length && blocking.length) {
+      blocking.filter(w => /^Contrast/.test(w)).forEach(w => rows.push(["warn", w]));
+      rows.push(["warn", "Upload is blocked until these are fixed – the bot checks packs with --strict. The \u201cMake it readable\u201d button fixes contrast automatically."]);
+    }
     $("checks").innerHTML = rows.map(([cls, msg]) => `<div class="${cls}">${esc(msg)}</div>`).join("");
-    for (const id of ["toUpload", "downloadBtn", "zipBtn"]) $(id).disabled = errors.length > 0;
+    for (const id of ["downloadBtn", "zipBtn"]) $(id).disabled = errors.length > 0;
+    $("toUpload").disabled = errors.length > 0 || blocking.length > 0;
   }
 
   $("downloadBtn").addEventListener("click", () => downloadJson(cur));
@@ -866,6 +888,19 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       toast(`Opened "${pack.name || f.name}"`);
     } catch (err) { toast(err.message || "Could not read that file"); }
   });
+  $("edShot").addEventListener("change", e => {
+    const f = e.target.files[0]; e.target.value = "";
+    if (f) { setImage(f); upThemeFromEditor = true; }
+  });
+  $("edShotRm").addEventListener("click", () => clearImage());
+
+  function renderEditorShot() {
+    const box = $("edThumb"), rm = $("edShotRm");
+    if (!upImage) { box.innerHTML = ""; rm.hidden = true; return; }
+    box.innerHTML = `<figure><img src="${upImage.url}" alt="Screenshot preview"><figcaption>${esc(upImage.file.name)} · ${(upImage.file.size / 1024).toFixed(0)} KB</figcaption></figure>`;
+    rm.hidden = false;
+  }
+
   $("toUpload").addEventListener("click", () => { setUpPack(cur, true); location.hash = "#upload"; });
 
   // ================= upload =================
@@ -886,6 +921,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     const {errors, warnings} = validatePack(p);
     const taken = shop.find(s => s.pack.id === p.id || s.pack.name.toLowerCase() === String(p.name || "").toLowerCase());
     if (taken && !errors.length) errors.push(`"${taken.pack.name}" already exists in the shop. Change the name and id in the editor.`);
+    for (const w of warnings) if (!/^Unknown/.test(w)) errors.push(w + " (the bot checks with --strict, so this must be fixed)");
     if (errors.length) {
       upPack = null;
       $("upTheme").innerHTML = `<p class="note warn">This pack cannot be uploaded yet:</p><ul class="list">${errors.slice(0, 6).map(e => `<li>${esc(e)}</li>`).join("")}</ul>
@@ -900,13 +936,22 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     updateUploadHelp();
   }
 
+  function clearImage() {
+    if (upImage) URL.revokeObjectURL(upImage.url);
+    upImage = null;
+    $("thumbs").innerHTML = "";
+    renderEditorShot();
+    updateUploadHelp();
+  }
+
   function setImage(file) {
     if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return toast("Screenshot must be PNG, JPG or WebP");
     if (file.size > 3 * 1024 * 1024) return toast("Screenshot is larger than 3 MB");
     if (upImage) URL.revokeObjectURL(upImage.url);
     upImage = {file, url: URL.createObjectURL(file)};
     $("thumbs").innerHTML = `<figure><img src="${upImage.url}" alt="Screenshot preview"><figcaption>${esc(file.name)} · ${(file.size / 1024).toFixed(0)} KB</figcaption><button class="rm" id="rmShot" aria-label="Remove screenshot">×</button></figure>`;
-    $("rmShot").onclick = () => { URL.revokeObjectURL(upImage.url); upImage = null; $("thumbs").innerHTML = ""; updateUploadHelp(); };
+    $("rmShot").onclick = () => clearImage();
+    renderEditorShot();
     updateUploadHelp();
   }
 
@@ -943,6 +988,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
   // ================= start =================
   buildEditor();
   loadEditor({schema_version: 1, id: "my-theme", name: "My Theme", author: "", version: "1.0.0", license: "MIT", base: "modern-dark", colors: Object.fromEntries(REQUIRED.map(k => [k, BASES["modern-dark"].colors[k]]))});
+  renderEditorShot();
   shop = FALLBACK.map(pack => ({pack, entry: {file: pack.id + ".ipmtheme.json"}}));
   renderStats(); renderShop();
   loadShop();
