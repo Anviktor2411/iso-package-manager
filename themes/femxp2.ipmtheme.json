@@ -1,0 +1,29 @@
+{
+  "$schema": "../theme-pack.schema.json",
+  "schema_version": 1,
+  "id": "femxp2",
+  "name": "FemXP2",
+  "author": "F1NEL",
+  "version": "2.0.0",
+  "license": "MIT",
+  "base": "modern-dark",
+  "colors": {
+    "bg": "#111e10",
+    "panel": "#1b2e1a",
+    "text": "#e1ebe0",
+    "muted": "#a4b9a2",
+    "accent": "#d63cdd",
+    "accent_active": "#c123c7",
+    "danger": "#da2f2f",
+    "danger_active": "#ba2121",
+    "border": "#2f432d",
+    "selection": "#8b248f",
+    "tree_bg": "#1b2e1a",
+    "tree_heading_bg": "#111e10",
+    "tree_heading_fg": "#e1ebe0",
+    "tab_bg": "#1b2e1a",
+    "tab_selected_bg": "#111e10",
+    "accent_text": "#ffffff",
+    "selection_fg": "#ffffff"
+  }
+}

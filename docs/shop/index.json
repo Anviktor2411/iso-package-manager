@@ -2,6 +2,16 @@
   "schema_version": 1,
   "themes": [
     {
+      "file": "femxp2.ipmtheme.json",
+      "id": "femxp2",
+      "name": "FemXP2",
+      "author": "F1NEL",
+      "version": "2.0.0",
+      "base": "modern-dark",
+      "issue": 7,
+      "submitted_by": "f1nel-egy"
+    },
+    {
       "file": "catppuccin-mocha.ipmtheme.json",
       "id": "catppuccin-mocha",
       "name": "Catppuccin Mocha",
