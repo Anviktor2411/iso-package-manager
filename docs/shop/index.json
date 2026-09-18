@@ -34,6 +34,14 @@
       "base": "modern-dark"
     },
     {
+      "file": "seeme.ipmtheme.json",
+      "id": "seeme",
+      "name": "SEEME",
+      "author": "Viki",
+      "version": "1.0.0",
+      "base": "modern-dark"
+    },
+    {
       "file": "solarized-light.ipmtheme.json",
       "id": "solarized-light",
       "name": "Solarized Light",
