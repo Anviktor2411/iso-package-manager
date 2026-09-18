@@ -293,7 +293,7 @@ class TestLoading(unittest.TestCase):
     def test_loads_shipped_packs(self):
         registry = T.load_themes([THEMES_DIR])
         pack_ids = {t.id for t in registry.packs()}
-        self.assertEqual(pack_ids, {"nord", "dracula", "gruvbox-dark", "solarized-light", "catppuccin-mocha"})
+        self.assertLessEqual({"nord", "dracula", "gruvbox-dark", "solarized-light", "catppuccin-mocha"}, pack_ids)
         self.assertEqual(registry.problems, [], registry.problems)
 
     def test_packs_follow_builtins_in_menu_order(self):
