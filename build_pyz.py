@@ -71,6 +71,7 @@ MODULES = (
     # Optional, but without it the archive has no theme-pack support at all
     # (main.py imports it defensively, so a missing copy is silently ignored).
     "ipm_themes.py",
+    "ipm_shop.py",
 )
 
 # Docs are tiny and make the archive self-describing.

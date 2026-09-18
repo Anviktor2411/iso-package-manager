@@ -82,6 +82,11 @@ try:
 except Exception:  # pragma: no cover - theme packs are optional
     _ipm_themes = None
 
+try:  # the in-app Theme Shop is optional as well
+    import ipm_shop as _ipm_shop
+except Exception:  # pragma: no cover
+    _ipm_shop = None
+
 
 def _ipm_theme_menu_entries() -> list:
     """Menu labels: the built-ins, then a separator, then installed packs."""
@@ -95,6 +100,48 @@ def _ipm_theme_menu_entries() -> list:
     if not packs:
         return builtins
     return builtins + [None] + packs
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = (value or "").strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    if len(value) != 6:
+        return (0, 0, 0)
+    try:
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return (0, 0, 0)
+
+
+def _mix(first: str, second: str, amount: float) -> str:
+    """``amount`` 0 -> first, 1 -> second."""
+    a, b = _hex_to_rgb(first), _hex_to_rgb(second)
+    out = tuple(round(a[i] + (b[i] - a[i]) * max(0.0, min(1.0, amount))) for i in range(3))
+    return "#%02x%02x%02x" % out
+
+
+def _is_dark(value: str) -> bool:
+    r, g, b = _hex_to_rgb(value)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 128
+
+
+def _use_dark_title_bar(window, dark: bool) -> None:
+    """Windows 10/11: paint the title bar to match the theme. No-op elsewhere."""
+    if not is_windows():
+        return
+    try:
+        import ctypes
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        for attribute in (20, 19):  # 20 = Win10 20H1+, 19 = earlier builds
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+            ) == 0:
+                break
+    except Exception:
+        pass
 
 
 def _ipm_theme_labels() -> list:
@@ -555,6 +602,11 @@ class App(tk.Tk):
         self._download_manager_thread.start()
 
         try:
+            self._load_download_jobs()
+        except Exception:
+            pass
+
+        try:
             self.protocol("WM_DELETE_WINDOW", self._on_close)
         except Exception:
             pass
@@ -591,6 +643,9 @@ class App(tk.Tk):
                 variable=self._theme_var,
                 command=lambda v=label: self._set_theme(v),
             )
+        theme_menu.add_separator()
+        theme_menu.add_command(label=self._t("Get more themes..."), command=self._open_theme_shop)
+        theme_menu.add_command(label=self._t("Reload themes"), command=self._reload_themes)
         menubar.add_cascade(label=self._t("Theme"), menu=theme_menu)
 
         lang_menu = tk.Menu(menubar, tearoff=0)
@@ -603,6 +658,120 @@ class App(tk.Tk):
             )
         menubar.add_cascade(label=self._t("Language"), menu=lang_menu)
         self.configure(menu=menubar)
+        self._paint_menus()
+
+    # Labels and plain frames that live on a card must use the card colour.
+    _PANEL_FRAME_STYLES = ("Panel.TFrame", "Card.TFrame")
+    _PANEL_LABEL_MAP = {
+        "": "Panel.TLabel",
+        "TLabel": "Panel.TLabel",
+        "Muted.TLabel": "PanelMuted.TLabel",
+        "Title.TLabel": "PanelTitle.TLabel",
+    }
+
+    def _normalize_panel_backgrounds(self, widget=None, on_panel: bool = False) -> None:
+        """Walk the widget tree and carry the panel colour down into it.
+
+        Tk has no inheritance for ttk backgrounds, so a plain frame or a label
+        dropped inside a card keeps the window colour and shows up as a box.
+        This walks once after the UI is built and hands every child the right
+        style, which means new widgets never have to remember to ask for it.
+        """
+        if widget is None:
+            widget = self
+            on_panel = False
+
+        try:
+            children = widget.winfo_children()
+        except Exception:
+            return
+
+        for child in children:
+            child_on_panel = on_panel
+            try:
+                cls = child.winfo_class()
+            except Exception:
+                continue
+
+            if cls in ("TFrame", "TLabelframe"):
+                try:
+                    style = str(child.cget("style") or "")
+                except Exception:
+                    style = ""
+                if style in self._PANEL_FRAME_STYLES:
+                    child_on_panel = True
+                elif on_panel and style in ("", "TFrame"):
+                    # A bare container inside a card: give it the card colour.
+                    try:
+                        child.configure(style="Panel.TFrame")
+                    except Exception:
+                        pass
+            elif cls == "TNotebook":
+                child_on_panel = False
+            elif cls == "TLabel" and on_panel:
+                try:
+                    style = str(child.cget("style") or "")
+                except Exception:
+                    style = ""
+                target = self._PANEL_LABEL_MAP.get(style)
+                if target:
+                    try:
+                        child.configure(style=target)
+                    except Exception:
+                        pass
+
+            self._normalize_panel_backgrounds(child, child_on_panel)
+
+    def _stripe_rows(self, tree) -> None:
+        """Alternate row colours so long lists stay readable."""
+        colors = getattr(self, "_colors", {})
+        odd = colors.get("row_alt")
+        if not odd:
+            return
+        try:
+            tree.tag_configure("ipm_odd", background=odd)
+            tree.tag_configure("ipm_even", background=colors.get("tree_bg", colors.get("panel", "")))
+            for index, row in enumerate(tree.get_children()):
+                tree.item(row, tags=("ipm_odd" if index % 2 else "ipm_even",))
+        except Exception:
+            pass
+
+    def _paint_menus(self) -> None:
+        """Give the menu bar and its drop-downs the palette colours."""
+        colors = getattr(self, "_menu_colors", None)
+        if not colors:
+            return
+
+        def paint(widget) -> None:
+            try:
+                widget.configure(**colors)
+            except Exception:
+                try:                       # older Tk: skip what it does not know
+                    widget.configure(background=colors["background"], foreground=colors["foreground"])
+                except Exception:
+                    return
+            try:
+                end = widget.index("end")
+            except Exception:
+                end = None
+            if end is None:
+                return
+            for index in range(end + 1):
+                try:
+                    if widget.type(index) == "cascade":
+                        name = widget.entrycget(index, "menu")
+                        child = widget.nametowidget(name) if name else None
+                        if child is not None:
+                            paint(child)
+                except Exception:
+                    continue
+
+        try:
+            name = self.cget("menu")
+            if name:
+                paint(self.nametowidget(name))
+        except Exception:
+            pass
 
     def _t(self, text: str) -> str:
         lang = (getattr(self, "_lang_var", None).get() if hasattr(self, "_lang_var") else "English")
@@ -682,6 +851,17 @@ class App(tk.Tk):
         set_text("_lbl_settings_custom_mirrors", self._t("Custom mirrors (optional):"))
         set_text("_lbl_settings_page_size", self._t("Page size:"))
         set_text("_btn_save_settings", self._t("Save Settings"))
+        set_text("_lbl_settings_look", self._t("Appearance"))
+        set_text("_lbl_settings_web", self._t("Web search"))
+        set_text("_lbl_settings_folders", self._t("Folders"))
+        set_text("_btn_settings_add_folder", self._t("Add Folder"))
+        set_text("_btn_settings_rm_folder", self._t("Remove Selected"))
+        set_text("_lbl_settings_sub", self._t("Preferences are stored in your user profile and applied right away."))
+        set_text("_lbl_settings_theme_hint", self._t("Community packs appear here once installed."))
+        set_text("_lbl_settings_page_size_hint", self._t("How many results one search page returns."))
+        set_text("_lbl_settings_provider_hint", self._t("DuckDuckGo needs no keys. The other two do."))
+        set_text("_lbl_settings_mirrors_hint", self._t("Comma separated base URLs, tried before the built-in list."))
+        set_text("_lbl_settings_folders_hint", self._t("These folders are scanned on the Local tab."))
         set_text("_lbl_net_searx", self._t("SearxNG URL:"))
         set_text("_lbl_net_gkey", self._t("Google API key:"))
         set_text("_lbl_net_gcx", self._t("Google CSE ID (cx):"))
@@ -694,6 +874,10 @@ class App(tk.Tk):
         set_text("_btn_stop_download", self._t("Stop"))
         set_text("_btn_job_pause", self._t("Pause"))
         set_text("_btn_job_resume", self._t("Resume"))
+        set_text("_btn_job_retry", self._t("Retry"))
+        set_text("_btn_job_open", self._t("Open folder"))
+        set_text("_btn_job_remove", self._t("Remove"))
+        set_text("_btn_job_clear", self._t("Clear finished"))
 
         set_text("_lbl_net_search", self._t("Search:"))
         set_text("_btn_load_more_remote", self._t("Load more"))
@@ -723,6 +907,15 @@ class App(tk.Tk):
             pass
 
         try:
+            if hasattr(self, "_jobs_tree") and self._jobs_tree.winfo_exists():
+                for key, title in (("job", "Job"), ("status", "Status"), ("progress", "Progress"),
+                                   ("size", "Size"), ("speed", "Speed"), ("eta", "Left")):
+                    self._jobs_tree.heading(key, text=self._t(title))
+            self._update_jobs_summary()
+        except Exception:
+            pass
+
+        try:
             if hasattr(self, "_status_var") and is_any_translation(self._status_var.get(), "Ready"):
                 self._status_var.set(self._t("Ready"))
         except Exception:
@@ -742,12 +935,63 @@ class App(tk.Tk):
                 pass
             self._collect_settings_from_ui()
             self._save_settings_file()
+            self._save_download_jobs(force=True)
         except Exception:
             pass
         try:
             self.destroy()
         except Exception:
             pass
+
+    def _reload_themes(self, use: str | None = None) -> None:
+        """Re-read the theme folders, refresh the menu and the Settings list."""
+        if _ipm_themes is not None:
+            try:
+                _ipm_themes.get_registry(refresh=True)
+            except Exception:
+                pass
+        try:
+            self._build_menu()
+        except Exception:
+            pass
+        combo = getattr(self, "_settings_theme_combo", None)
+        if combo is not None:
+            try:
+                if combo.winfo_exists():
+                    combo.configure(values=_ipm_theme_labels())
+            except Exception:
+                pass
+        if use:
+            self._set_theme(use)
+            try:
+                self._settings_theme_var.set(use)
+            except Exception:
+                pass
+
+    def _open_theme_shop(self) -> None:
+        """Open the Theme Shop window (downloads community themes)."""
+        if _ipm_shop is None:
+            messagebox.showinfo(
+                "Theme Shop",
+                "The Theme Shop needs ipm_shop.py next to the application.\n\n"
+                "You can also browse the themes at\n"
+                "https://anviktor2411.github.io/iso-package-manager/",
+                parent=self,
+            )
+            return
+        existing = getattr(self, "_theme_shop_win", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.deiconify()
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception:
+            pass
+        try:
+            self._theme_shop_win = _ipm_shop.open_shop(self, on_installed=self._reload_themes)
+        except Exception as exc:
+            messagebox.showerror("Theme Shop", str(exc), parent=self)
 
     def _set_theme(self, theme: str):
         self._theme_var.set(theme)
@@ -765,19 +1009,33 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-        if hasattr(self, "_folders_list") and self._folders_list.winfo_exists():
-            lb_bg = colors.get("panel", "#ffffff")
-            lb_fg = colors.get("text", "#000000")
-            lb_sel = colors.get("selection", "#316ac5")
+        for name in ("_folders_list", "_settings_folders_list", "_log_list"):
+            widget = getattr(self, name, None)
+            if widget is None:
+                continue
             try:
-                self._folders_list.configure(
-                    background=lb_bg,
-                    foreground=lb_fg,
-                    selectbackground=lb_sel,
-                    selectforeground="#ffffff",
+                if not widget.winfo_exists():
+                    continue
+                widget.configure(
+                    background=colors.get("tree_bg", colors.get("panel", "#ffffff")),
+                    foreground=colors.get("text", "#000000"),
+                    selectbackground=colors.get("selection", "#316ac5"),
+                    selectforeground=colors.get("selection_fg", "#ffffff"),
+                    highlightbackground=colors.get("border", colors.get("panel", "#ffffff")),
+                    highlightcolor=colors.get("accent", colors.get("selection", "#316ac5")),
                 )
             except Exception:
                 pass
+
+        try:
+            self._paint_job_tags()
+        except Exception:
+            pass
+
+        try:
+            self._normalize_panel_backgrounds()
+        except Exception:
+            pass
 
         self._apply_graphical_theme_assets(self._theme_var.get())
 
@@ -1028,6 +1286,12 @@ class App(tk.Tk):
                 tab_selected_bg = _pack.get("tab_selected_bg") or bg
             # -------------------------------------------------------------
 
+            # Text that sits *on* accent / selection, and the table header text.
+            # Packs may set them; the built-ins keep the old hard-coded values.
+            accent_text = (_pack.get("accent_text") if _pack else None) or "#ffffff"
+            selection_fg = (_pack.get("selection_fg") if _pack else None) or "#ffffff"
+            heading_fg = (_pack.get("tree_heading_fg") if _pack else None) or text
+
             default_font = (font_family, 10)
             ui_font = (font_family, 10)
             heading_font = (font_family, 10, "bold")
@@ -1042,6 +1306,14 @@ class App(tk.Tk):
                 "danger": danger,
                 "border": border,
                 "selection": selection,
+                "accent_text": accent_text,
+                "selection_fg": selection_fg,
+                "tree_bg": tree_bg,
+                "row_alt": _mix(tree_bg, text, 0.05),
+                "accent_active": accent_active,
+                "ok": _mix(text, "#22c55e", 0.72),
+                "panel": panel,
+                "muted": muted,
             }
 
             self.configure(background=bg)
@@ -1052,6 +1324,20 @@ class App(tk.Tk):
             self._style.configure("Muted.TLabel", font=ui_font, background=bg, foreground=muted)
             self._style.configure("Title.TLabel", font=title_font, background=bg, foreground=text)
             self._style.configure("TSeparator", background=border)
+            self._style.configure("Status.TLabel", font=ui_font, background=panel,
+                                  foreground=muted, padding=(10, 6))
+
+            # Labels sitting *on* a card need the card's background, otherwise
+            # every caption looks like a little box of the window colour.
+            self._style.configure("Panel.TLabel", font=ui_font, background=panel, foreground=text)
+            self._style.configure("PanelMuted.TLabel", font=ui_font, background=panel, foreground=muted)
+            self._style.configure("PanelTitle.TLabel", font=title_font, background=panel, foreground=text)
+            self._style.configure("Section.TLabel", font=heading_font, background=panel, foreground=text)
+            self._style.configure("Hint.TLabel", font=(font_family, 9), background=panel, foreground=muted)
+            self._style.configure("Value.TLabel", font=heading_font, background=panel, foreground=accent)
+            self._style.configure("Card.TFrame", background=panel, bordercolor=border,
+                                  lightcolor=border, darkcolor=border,
+                                  relief="solid", borderwidth=1)
 
             self._style.configure("TEntry", padding=(8, 6))
             self._style.configure("TCombobox", padding=(8, 6))
@@ -1059,8 +1345,36 @@ class App(tk.Tk):
             self._style.configure(
                 "TButton",
                 font=ui_font,
-                padding=(12, 8),
+                padding=(10, 7),
             )
+            if theme not in ("Graphical", "Windows XP"):
+                # Plain buttons used to keep the ttk default grey, which looked
+                # wrong on every palette. They now get their own surface - a
+                # shade away from the panel so the button is visible - with a
+                # hover tint mixed towards the accent.
+                surface = _mix(panel, text, 0.10)
+                hover = _mix(panel, accent, 0.30)
+                pressed = _mix(panel, accent, 0.45)
+                self._style.configure(
+                    "TButton",
+                    background=surface,
+                    foreground=text,
+                    bordercolor=_mix(border, text, 0.12),
+                    lightcolor=surface,
+                    darkcolor=surface,
+                    focuscolor=accent,
+                    focusthickness=1,
+                    borderwidth=1,
+                    relief="solid",
+                )
+                self._style.map(
+                    "TButton",
+                    background=[("disabled", _mix(panel, bg, 0.6)), ("pressed", pressed), ("active", hover)],
+                    foreground=[("disabled", _mix(muted, bg, 0.35))],
+                    bordercolor=[("focus", accent), ("active", accent), ("disabled", border)],
+                    lightcolor=[("pressed", pressed), ("active", hover)],
+                    darkcolor=[("pressed", pressed), ("active", hover)],
+                )
             if theme == "Graphical":
                 self._style.configure(
                     "TButton",
@@ -1134,7 +1448,7 @@ class App(tk.Tk):
                     font=ui_font,
                     padding=(12, 8),
                     background=accent,
-                    foreground="#ffffff",
+                    foreground=accent_text,
                     bordercolor=accent,
                     focusthickness=2,
                     focuscolor=border,
@@ -1178,20 +1492,29 @@ class App(tk.Tk):
             self._style.configure(
                 "Treeview.Heading",
                 font=heading_font,
-                background=tree_heading_bg,
-                foreground=text,
+                background=_mix(tree_heading_bg, text, 0.06),
+                foreground=heading_fg,
+                bordercolor=border,
                 relief="raised" if theme == "Windows XP" else "flat",
-                padding=(10, 10),
+                padding=(10, 11),
+            )
+            self._style.map(
+                "Treeview.Heading",
+                background=[("active", _mix(tree_heading_bg, accent, 0.25))],
+                foreground=[("active", text)],
             )
             self._style.map(
                 "Treeview",
                 background=[("selected", selection)],
-                foreground=[("selected", "#ffffff")],
+                foreground=[("selected", selection_fg)],
             )
 
             self._style.configure(
                 "TNotebook",
                 background=bg,
+                bordercolor=border,
+                lightcolor=bg,
+                darkcolor=bg,
                 tabmargins=(10, 6, 10, 0),
             )
             self._style.configure(
@@ -1200,14 +1523,101 @@ class App(tk.Tk):
                 padding=(14, 10),
                 background=tab_bg,
                 foreground=muted,
+                bordercolor=border,
+                lightcolor=tab_bg,
+                darkcolor=tab_bg,
                 relief="raised" if theme == "Windows XP" else "flat",
             )
+            _use_dark_title_bar(self, _is_dark(bg))
+            self._menu_colors = {
+                "background": panel,
+                "foreground": text,
+                "activebackground": accent,
+                "activeforeground": accent_text,
+                "selectcolor": accent,
+                "borderwidth": 0,
+                "relief": "flat",
+            }
+            _try_menu = getattr(self, "_paint_menus", None)
+            if callable(_try_menu):
+                _try_menu()
             self._style.map(
                 "TNotebook.Tab",
-                background=[("selected", tab_selected_bg), ("active", tab_bg)],
+                background=[("selected", tab_selected_bg), ("active", _mix(tab_bg, accent, 0.18))],
                 foreground=[("selected", text), ("active", text)],
+                lightcolor=[("selected", accent)],
+                bordercolor=[("selected", accent)],
                 relief=[("selected", "raised"), ("active", "raised")] if theme == "Windows XP" else [],
             )
+
+            # -- the rest of the widgets follow the palette too ---------------
+            # Every block is separate: a ttk engine that does not know an option
+            # (vista/xpnative are picky) must not stop the ones after it.
+            field_bg = tree_bg if theme != "Windows XP" else panel
+
+            def _try(func):
+                try:
+                    func()
+                except Exception:
+                    pass
+
+            _try(lambda: self._style.configure(
+                "TEntry", fieldbackground=field_bg, foreground=text, insertcolor=text,
+                bordercolor=border, lightcolor=border, darkcolor=border,
+            ))
+            _try(lambda: self._style.map(
+                "TEntry",
+                bordercolor=[("focus", accent)], lightcolor=[("focus", accent)],
+                fieldbackground=[("disabled", panel)], foreground=[("disabled", muted)],
+            ))
+            _try(lambda: self._style.configure(
+                "TCombobox", fieldbackground=field_bg, background=panel, foreground=text,
+                arrowcolor=accent, bordercolor=border, lightcolor=border, darkcolor=border,
+            ))
+            _try(lambda: self._style.map(
+                "TCombobox",
+                fieldbackground=[("readonly", field_bg), ("disabled", panel)],
+                foreground=[("disabled", muted)],
+                bordercolor=[("focus", accent)], lightcolor=[("focus", accent)],
+                selectbackground=[("readonly", selection)], selectforeground=[("readonly", selection_fg)],
+            ))
+            _try(lambda: self._style.configure(
+                "TSpinbox", fieldbackground=field_bg, foreground=text, arrowcolor=accent,
+                bordercolor=border, lightcolor=border, darkcolor=border,
+            ))
+            for _name in ("TCheckbutton", "TRadiobutton"):
+                _try(lambda name=_name: self._style.configure(
+                    name, font=ui_font, background=bg, foreground=text,
+                    focuscolor=accent, indicatorcolor=field_bg, bordercolor=border,
+                ))
+                _try(lambda name=_name: self._style.map(
+                    name,
+                    foreground=[("disabled", muted)],
+                    indicatorcolor=[("selected", accent), ("pressed", accent_active)],
+                    background=[("active", bg)],
+                ))
+            for _name in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+                _try(lambda name=_name: self._style.configure(
+                    name, background=panel, troughcolor=bg, bordercolor=border,
+                    arrowcolor=muted, lightcolor=panel, darkcolor=panel,
+                ))
+                _try(lambda name=_name: self._style.map(
+                    name,
+                    background=[("active", accent), ("pressed", accent_active)],
+                    arrowcolor=[("active", accent_text)],
+                ))
+            _try(lambda: self._style.configure(
+                "Horizontal.TProgressbar", background=accent, troughcolor=panel,
+                bordercolor=border, lightcolor=accent, darkcolor=accent,
+            ))
+            _try(lambda: self._style.configure(
+                "TLabelframe", background=bg, bordercolor=border, lightcolor=border, darkcolor=border,
+            ))
+            _try(lambda: self._style.configure(
+                "TLabelframe.Label", background=bg, foreground=accent, font=heading_font,
+            ))
+            _try(lambda: self._style.configure("TPanedwindow", background=bg))
+            _try(lambda: self._style.configure("Sash", background=border))
         except Exception:
             pass
 
@@ -1231,6 +1641,11 @@ class App(tk.Tk):
         self._build_internet_tab(self._tab_internet)
         self._build_settings_tab(self._tab_settings)
         self._build_logs_tab(self._tab_logs)
+
+        try:
+            self._normalize_panel_backgrounds()
+        except Exception:
+            pass
 
     def _log(self, msg: str) -> None:
         try:
@@ -1520,6 +1935,34 @@ class App(tk.Tk):
             self._set_net_status("Ready")
         except Exception:
             pass
+        try:
+            stamp = datetime.now().strftime("%H:%M:%S")
+            self._settings_saved_var.set(f"{self._t('Saved')} {stamp}")
+        except Exception:
+            pass
+
+    def _card(self, parent, title: str, *, padding=(14, 12, 14, 14)):
+        """A titled card. Returns (card, body) - put the content in ``body``."""
+        card = ttk.Frame(parent, padding=padding, style="Card.TFrame")
+        card.columnconfigure(0, weight=1)
+        head = ttk.Label(card, text=self._t(title), style="Section.TLabel")
+        head.grid(row=0, column=0, sticky="w")
+        ttk.Separator(card, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=(6, 10))
+        body = ttk.Frame(card, style="Panel.TFrame")
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+        card.rowconfigure(2, weight=1)
+        return card, body, head
+
+    @staticmethod
+    def _field(body, row: int, label, widget, hint_widget=None) -> int:
+        """One label + control line inside a card body."""
+        label.grid(row=row, column=0, sticky="w", padx=(0, 14), pady=(0, 10))
+        widget.grid(row=row, column=1, sticky="ew", pady=(0, 10))
+        if hint_widget is not None:
+            hint_widget.grid(row=row + 1, column=1, sticky="w", pady=(0, 10))
+            return row + 2
+        return row + 1
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -1530,14 +1973,18 @@ class App(tk.Tk):
         header.columnconfigure(0, weight=1)
         self._lbl_settings_header = ttk.Label(header, text=self._t("Settings"), style="Title.TLabel")
         self._lbl_settings_header.grid(row=0, column=0, sticky="w")
+        self._lbl_settings_sub = ttk.Label(
+            header,
+            text=self._t("Preferences are stored in your user profile and applied right away."),
+            style="Muted.TLabel",
+        )
+        self._lbl_settings_sub.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
         content = ttk.Frame(parent, padding=10)
         content.grid(row=1, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-
-        panel = ttk.Frame(content, padding=(10, 10, 10, 10), style="Panel.TFrame")
-        panel.grid(row=0, column=0, sticky="nsew")
-        panel.columnconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1, uniform="settings")
+        content.columnconfigure(1, weight=1, uniform="settings")
+        content.rowconfigure(2, weight=1)
 
         self._settings_theme_var = tk.StringVar(value=self._theme_var.get())
         self._settings_lang_var = tk.StringVar(value=self._lang_var.get())
@@ -1550,93 +1997,108 @@ class App(tk.Tk):
         self._settings_custom_mirrors_var = tk.StringVar(value="")
         self._settings_remote_page_size_var = tk.StringVar(value="200")
 
-        self._lbl_settings_theme = ttk.Label(panel, text=self._t("Theme"))
-        self._lbl_settings_theme.grid(row=0, column=0, sticky="w")
+        # ---- Appearance ---------------------------------------------------
+        look_card, look, self._lbl_settings_look = self._card(content, "Appearance")
+        look_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 10))
+
+        row = 0
+        self._lbl_settings_theme = ttk.Label(look, text=self._t("Theme"))
         self._settings_theme_combo = ttk.Combobox(
-            panel,
+            look,
             textvariable=self._settings_theme_var,
             state="readonly",
             values=_ipm_theme_labels(),
-            width=18,
         )
-        self._settings_theme_combo.grid(row=1, column=0, sticky="w", pady=(6, 10))
+        self._lbl_settings_theme_hint = ttk.Label(
+            look, text=self._t("Community packs appear here once installed."), style="Hint.TLabel",
+        )
+        row = self._field(look, row, self._lbl_settings_theme,
+                          self._settings_theme_combo, self._lbl_settings_theme_hint)
 
-        self._lbl_settings_lang = ttk.Label(panel, text=self._t("Language"))
-        self._lbl_settings_lang.grid(row=2, column=0, sticky="w")
+        self._lbl_settings_lang = ttk.Label(look, text=self._t("Language"))
         self._settings_lang_combo = ttk.Combobox(
-            panel,
+            look,
             textvariable=self._settings_lang_var,
             state="readonly",
             values=["English", "German", "Spanish", "French", "Russian", "Portuguese", "Chinese (Simplified)"],
-            width=22,
         )
-        self._settings_lang_combo.grid(row=3, column=0, sticky="w", pady=(6, 10))
+        row = self._field(look, row, self._lbl_settings_lang, self._settings_lang_combo)
 
-        self._lbl_settings_startup = ttk.Label(panel, text=self._t("Startup tab"))
-        self._lbl_settings_startup.grid(row=4, column=0, sticky="w")
+        self._lbl_settings_startup = ttk.Label(look, text=self._t("Startup tab"))
         self._settings_startup_combo = ttk.Combobox(
-            panel,
+            look,
             textvariable=self._settings_startup_tab_var,
             state="readonly",
             values=["Local", "Internet", "Settings"],
-            width=12,
         )
-        self._settings_startup_combo.grid(row=5, column=0, sticky="w", pady=(6, 16))
+        row = self._field(look, row, self._lbl_settings_startup, self._settings_startup_combo)
 
-        self._lbl_settings_provider = ttk.Label(panel, text=self._t("Provider:"))
-        self._lbl_settings_provider.grid(row=6, column=0, sticky="w")
+        self._lbl_settings_page_size = ttk.Label(look, text=self._t("Page size:"))
+        self._settings_page_size_combo = ttk.Combobox(
+            look,
+            textvariable=self._settings_remote_page_size_var,
+            values=["50", "100", "200", "500", "1000"],
+            state="readonly",
+        )
+        self._lbl_settings_page_size_hint = ttk.Label(
+            look, text=self._t("How many results one search page returns."), style="Hint.TLabel",
+        )
+        row = self._field(look, row, self._lbl_settings_page_size,
+                          self._settings_page_size_combo, self._lbl_settings_page_size_hint)
+
+        # ---- Web search ---------------------------------------------------
+        web_card, web, self._lbl_settings_web = self._card(content, "Web search")
+        web_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 10))
+
+        row = 0
+        self._lbl_settings_provider = ttk.Label(web, text=self._t("Provider:"))
         self._settings_provider_combo = ttk.Combobox(
-            panel,
+            web,
             textvariable=self._settings_provider_var,
             state="readonly",
             values=["DuckDuckGo", "SearxNG", "Google API"],
-            width=18,
         )
-        self._settings_provider_combo.grid(row=7, column=0, sticky="ew", pady=(6, 10))
-
-        self._lbl_settings_searx = ttk.Label(panel, text=self._t("SearxNG URL:"))
-        self._lbl_settings_searx.grid(row=8, column=0, sticky="w")
-        self._settings_searx_entry = ttk.Entry(panel, textvariable=self._settings_searx_url_var)
-        self._settings_searx_entry.grid(row=9, column=0, sticky="ew", pady=(6, 10))
-
-        self._lbl_settings_gkey = ttk.Label(panel, text=self._t("Google API key:"))
-        self._lbl_settings_gkey.grid(row=10, column=0, sticky="w")
-        self._settings_gkey_entry = ttk.Entry(panel, textvariable=self._settings_google_key_var, show="•")
-        self._settings_gkey_entry.grid(row=11, column=0, sticky="ew", pady=(6, 10))
-
-        self._lbl_settings_gcx = ttk.Label(panel, text=self._t("Google CSE ID (cx):"))
-        self._lbl_settings_gcx.grid(row=12, column=0, sticky="w")
-        self._settings_gcx_entry = ttk.Entry(panel, textvariable=self._settings_google_cx_var)
-        self._settings_gcx_entry.grid(row=13, column=0, sticky="ew", pady=(6, 10))
-
-        self._lbl_settings_custom_mirrors = ttk.Label(panel, text=self._t("Custom mirrors (optional):"))
-        self._lbl_settings_custom_mirrors.grid(row=14, column=0, sticky="w")
-        self._settings_custom_mirrors_entry = ttk.Entry(panel, textvariable=self._settings_custom_mirrors_var)
-        self._settings_custom_mirrors_entry.grid(row=15, column=0, sticky="ew", pady=(6, 10))
-
-        self._lbl_settings_page_size = ttk.Label(panel, text=self._t("Page size:"))
-        self._lbl_settings_page_size.grid(row=16, column=0, sticky="w")
-        self._settings_page_size_combo = ttk.Combobox(
-            panel,
-            textvariable=self._settings_remote_page_size_var,
-            values=["50", "100", "200", "500", "1000"],
-            width=7,
-            state="readonly",
+        self._lbl_settings_provider_hint = ttk.Label(
+            web, text=self._t("DuckDuckGo needs no keys. The other two do."), style="Hint.TLabel",
         )
-        self._settings_page_size_combo.grid(row=17, column=0, sticky="w", pady=(6, 16))
+        row = self._field(web, row, self._lbl_settings_provider,
+                          self._settings_provider_combo, self._lbl_settings_provider_hint)
 
-        self._lbl_settings_folders = ttk.Label(panel, text=self._t("Folders"))
-        self._lbl_settings_folders.grid(row=18, column=0, sticky="w")
-        folders_frame = ttk.Frame(panel, style="Panel.TFrame")
-        folders_frame.grid(row=19, column=0, sticky="nsew", pady=(6, 10))
+        self._lbl_settings_searx = ttk.Label(web, text=self._t("SearxNG URL:"))
+        self._settings_searx_entry = ttk.Entry(web, textvariable=self._settings_searx_url_var)
+        row = self._field(web, row, self._lbl_settings_searx, self._settings_searx_entry)
+
+        self._lbl_settings_gkey = ttk.Label(web, text=self._t("Google API key:"))
+        self._settings_gkey_entry = ttk.Entry(web, textvariable=self._settings_google_key_var, show="•")
+        row = self._field(web, row, self._lbl_settings_gkey, self._settings_gkey_entry)
+
+        self._lbl_settings_gcx = ttk.Label(web, text=self._t("Google CSE ID (cx):"))
+        self._settings_gcx_entry = ttk.Entry(web, textvariable=self._settings_google_cx_var)
+        row = self._field(web, row, self._lbl_settings_gcx, self._settings_gcx_entry)
+
+        self._lbl_settings_custom_mirrors = ttk.Label(web, text=self._t("Custom mirrors (optional):"))
+        self._settings_custom_mirrors_entry = ttk.Entry(web, textvariable=self._settings_custom_mirrors_var)
+        self._lbl_settings_mirrors_hint = ttk.Label(
+            web, text=self._t("Comma separated base URLs, tried before the built-in list."), style="Hint.TLabel",
+        )
+        row = self._field(web, row, self._lbl_settings_custom_mirrors,
+                          self._settings_custom_mirrors_entry, self._lbl_settings_mirrors_hint)
+
+        # ---- Folders ------------------------------------------------------
+        folders_card, folders_body, self._lbl_settings_folders = self._card(content, "Folders")
+        folders_card.grid(row=1, column=0, columnspan=2, sticky="new")
+        folders_body.columnconfigure(0, weight=1)
+        folders_body.rowconfigure(0, weight=1)
+
+        folders_frame = ttk.Frame(folders_body, style="Panel.TFrame")
+        folders_frame.grid(row=0, column=0, sticky="nsew")
         folders_frame.columnconfigure(0, weight=1)
         folders_frame.rowconfigure(0, weight=1)
-        panel.rowconfigure(19, weight=1)
 
         colors = getattr(self, "_colors", {})
-        lb_bg = colors.get("panel", "#111827")
+        lb_bg = colors.get("tree_bg", colors.get("panel", "#111827"))
         lb_fg = colors.get("text", "#e5e7eb")
-        lb_sel = "#1f3a8a"
+        lb_sel = colors.get("selection", "#1f3a8a")
         self._settings_folders_list = tk.Listbox(
             folders_frame,
             height=6,
@@ -1644,9 +2106,10 @@ class App(tk.Tk):
             background=lb_bg,
             foreground=lb_fg,
             selectbackground=lb_sel,
-            selectforeground="#ffffff",
+            selectforeground=colors.get("selection_fg", "#ffffff"),
             highlightthickness=1,
             relief="flat",
+            activestyle="none",
         )
         self._settings_folders_list.grid(row=0, column=0, sticky="nsew")
         folders_scroll = ttk.Scrollbar(folders_frame, orient="vertical", command=self._settings_folders_list.yview)
@@ -1663,6 +2126,9 @@ class App(tk.Tk):
             d = filedialog.askdirectory(title="Add folder")
             if not d:
                 return
+            existing = set(self._settings_folders_list.get(0, tk.END))
+            if d in existing:
+                return
             self._settings_folders_list.insert(tk.END, d)
 
         def remove_folder_settings():
@@ -1673,16 +2139,30 @@ class App(tk.Tk):
                 except Exception:
                     pass
 
-        btn_row = ttk.Frame(panel, style="Panel.TFrame")
-        btn_row.grid(row=20, column=0, sticky="ew", pady=(0, 12))
-        btn_row.columnconfigure(0, weight=1)
-        b_add = ttk.Button(btn_row, text=self._t("Add Folder"), command=add_folder_settings)
-        b_add.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        b_rm = ttk.Button(btn_row, text=self._t("Remove Selected"), command=remove_folder_settings)
-        b_rm.grid(row=0, column=1, sticky="ew")
+        side = ttk.Frame(folders_body, style="Panel.TFrame")
+        side.grid(row=0, column=1, sticky="n", padx=(10, 0))
+        self._btn_settings_add_folder = ttk.Button(side, text=self._t("Add Folder"), command=add_folder_settings)
+        self._btn_settings_add_folder.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self._btn_settings_rm_folder = ttk.Button(side, text=self._t("Remove Selected"), command=remove_folder_settings)
+        self._btn_settings_rm_folder.grid(row=1, column=0, sticky="ew")
+        self._lbl_settings_folders_hint = ttk.Label(
+            side, text=self._t("These folders are scanned on the Local tab."), style="Hint.TLabel", wraplength=170,
+        )
+        self._lbl_settings_folders_hint.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
-        self._btn_save_settings = ttk.Button(panel, text=self._t("Save Settings"), command=self._save_settings_clicked, style="Accent.TButton")
-        self._btn_save_settings.grid(row=21, column=0, sticky="ew")
+        # ---- Footer -------------------------------------------------------
+        footer = ttk.Frame(parent, padding=(10, 0, 10, 12))
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+
+        self._settings_saved_var = tk.StringVar(value="")
+        self._lbl_settings_saved = ttk.Label(footer, textvariable=self._settings_saved_var, style="Muted.TLabel")
+        self._lbl_settings_saved.grid(row=0, column=0, sticky="w")
+
+        self._btn_save_settings = ttk.Button(
+            footer, text=self._t("Save Settings"), command=self._save_settings_clicked, style="Accent.TButton",
+        )
+        self._btn_save_settings.grid(row=0, column=1, sticky="e")
 
     def _build_local_tab(self, parent: ttk.Frame):
         parent.columnconfigure(0, weight=1)
@@ -1693,6 +2173,10 @@ class App(tk.Tk):
         header.columnconfigure(0, weight=1)
         self._lbl_local_header = ttk.Label(header, text=self._t("Local ISOs"), style="Title.TLabel")
         self._lbl_local_header.grid(row=0, column=0, sticky="w")
+        self._local_count_var = tk.StringVar(value="")
+        self._lbl_local_count = ttk.Label(header, textvariable=self._local_count_var, style="Muted.TLabel")
+        self._lbl_local_count.grid(row=0, column=1, sticky="e")
+        header.columnconfigure(1, weight=0)
 
         content = ttk.Frame(parent, padding=10)
         content.grid(row=1, column=0, sticky="nsew")
@@ -1702,17 +2186,17 @@ class App(tk.Tk):
         paned = ttk.Panedwindow(content, orient="horizontal")
         paned.grid(row=0, column=0, sticky="nsew")
 
-        sidebar = ttk.Frame(paned, padding=(10, 10, 10, 10), style="Panel.TFrame")
-        main = ttk.Frame(paned, padding=(10, 10, 10, 10), style="Panel.TFrame")
+        sidebar = ttk.Frame(paned, padding=(12, 12, 12, 12), style="Card.TFrame", width=240)
+        main = ttk.Frame(paned, padding=(12, 12, 12, 12), style="Card.TFrame")
         paned.add(sidebar, weight=0)
         paned.add(main, weight=1)
 
         sidebar.columnconfigure(0, weight=1)
-        self._lbl_folders = ttk.Label(sidebar, text=self._t("Folders"), style="Muted.TLabel")
+        self._lbl_folders = ttk.Label(sidebar, text=self._t("Folders"), style="Section.TLabel")
         self._lbl_folders.grid(row=0, column=0, sticky="w")
 
         folders_frame = ttk.Frame(sidebar, style="Panel.TFrame")
-        folders_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 10))
+        folders_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 10))
         folders_frame.columnconfigure(0, weight=1)
         folders_frame.rowconfigure(0, weight=1)
         sidebar.rowconfigure(1, weight=1)
@@ -1744,10 +2228,12 @@ class App(tk.Tk):
         self._btn_remove_folder = ttk.Button(sidebar, text=self._t("Remove Selected"), command=self._remove_selected_folders)
         self._btn_remove_folder.grid(row=3, column=0, sticky="ew", pady=(0, 12))
 
+        ttk.Separator(sidebar, orient="horizontal").grid(row=4, column=0, sticky="ew", pady=(0, 12))
         self._btn_scan = ttk.Button(sidebar, text=self._t("Scan"), command=self._start_scan, style="Accent.TButton")
-        self._btn_scan.grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        self._btn_scan.grid(row=5, column=0, sticky="ew", pady=(0, 6))
         self._btn_stop_scan = ttk.Button(sidebar, text=self._t("Stop"), command=self._stop_scan_clicked, style="Danger.TButton")
-        self._btn_stop_scan.grid(row=5, column=0, sticky="ew")
+        self._btn_stop_scan.grid(row=6, column=0, sticky="ew")
+        self._set_scan_running(False)
 
         main.columnconfigure(0, weight=1)
         main.rowconfigure(1, weight=1)
@@ -1791,11 +2277,11 @@ class App(tk.Tk):
         self._tree.heading("size", text=self._t("Size"))
         self._tree.heading("modified", text=self._t("Modified"))
 
-        self._tree.column("name", width=200, anchor="w")
-        self._tree.column("info", width=150, anchor="w")
-        self._tree.column("path", width=390, anchor="w")
-        self._tree.column("size", width=100, anchor="e")
-        self._tree.column("modified", width=120, anchor="w")
+        self._tree.column("name", width=270, minwidth=160, anchor="w", stretch=True)
+        self._tree.column("info", width=190, minwidth=120, anchor="w", stretch=False)
+        self._tree.column("path", width=330, minwidth=180, anchor="w", stretch=True)
+        self._tree.column("size", width=95, minwidth=80, anchor="e", stretch=False)
+        self._tree.column("modified", width=140, minwidth=110, anchor="w", stretch=False)
 
         self._tree.grid(row=0, column=0, sticky="nsew")
         self._tree.bind("<<TreeviewSelect>>", lambda _e: self._on_selection_changed())
@@ -1810,13 +2296,14 @@ class App(tk.Tk):
         bottom.columnconfigure(1, weight=1)
 
         self._status_var = tk.StringVar(value=self._t("Ready"))
-        ttk.Label(bottom, textvariable=self._status_var).grid(row=0, column=0, sticky="w")
+        ttk.Label(bottom, textvariable=self._status_var, style="Muted.TLabel").grid(
+            row=0, column=0, sticky="w")
 
         self._progress = ttk.Progressbar(bottom, mode="determinate", maximum=100)
-        self._progress.grid(row=0, column=1, sticky="ew", padx=(10, 10))
+        self._progress.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(12, 0))
 
-        actions = ttk.Frame(bottom)
-        actions.grid(row=0, column=2, sticky="e")
+        actions = ttk.Frame(bottom, style="Panel.TFrame")
+        actions.grid(row=1, column=0, columnspan=3, sticky="e", pady=(10, 0))
 
         self._btn_mount_open = ttk.Button(actions, text=self._t("Mount + Open"), command=self._mount_and_open_clicked)
         self._btn_details = ttk.Button(actions, text=self._t("Show Details"), command=self._details_clicked)
@@ -1825,14 +2312,43 @@ class App(tk.Tk):
         self._btn_copy = ttk.Button(actions, text=self._t("Copy Path"), command=self._copy_path_clicked)
         self._btn_eject = ttk.Button(actions, text=self._t("Eject ISO"), command=self._eject_clicked)
 
-        self._btn_mount_open.grid(row=0, column=0, padx=(0, 6))
-        self._btn_details.grid(row=0, column=1, padx=(0, 6))
-        self._btn_dupes.grid(row=0, column=2, padx=(0, 6))
-        self._btn_extract.grid(row=0, column=3, padx=(0, 6))
-        self._btn_copy.grid(row=0, column=4, padx=(0, 6))
-        self._btn_eject.grid(row=0, column=5)
+        self._local_actions_frame = actions
+        self._local_action_buttons = [
+            self._btn_mount_open, self._btn_details, self._btn_dupes,
+            self._btn_extract, self._btn_copy, self._btn_eject,
+        ]
+        self._local_action_columns = 0
+        self._layout_local_actions()
+        bottom.bind("<Configure>", self._layout_local_actions)
 
         self._set_actions_enabled(False)
+
+    def _layout_local_actions(self, _event=None) -> None:
+        """Keep the action buttons on one row, or wrap them when the window is narrow."""
+        buttons = getattr(self, "_local_action_buttons", None)
+        frame = getattr(self, "_local_actions_frame", None)
+        if not buttons or frame is None:
+            return
+        try:
+            available = frame.master.winfo_width()
+            needed = sum(b.winfo_reqwidth() + 6 for b in buttons)
+            columns = len(buttons) if available <= 1 or needed <= available else 3
+            if columns == getattr(self, "_local_action_columns", 0):
+                return
+            self._local_action_columns = columns
+            for index, button in enumerate(buttons):
+                button.grid_forget()
+                button.grid(
+                    row=index // columns,
+                    column=index % columns,
+                    sticky="ew",
+                    padx=(0, 6),
+                    pady=(0, 6) if index // columns == 0 and columns < len(buttons) else 0,
+                )
+            for column in range(max(columns, len(buttons))):
+                frame.columnconfigure(column, weight=0, uniform="")
+        except Exception:
+            pass
 
     def _restore_geometry(self, saved: str) -> str | None:
         """Apply a saved "WxH+X+Y" string, clamped so it stays usable on screen.
@@ -2225,36 +2741,62 @@ class App(tk.Tk):
         downloads_panel.columnconfigure(0, weight=1)
         downloads_panel.rowconfigure(1, weight=1)
 
-        ttk.Label(downloads_panel, text="Downloads:").grid(row=0, column=0, sticky="w", padx=(0, 0), pady=(0, 6))
+        jobs_head = ttk.Frame(downloads_panel, style="Panel.TFrame")
+        jobs_head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        jobs_head.columnconfigure(1, weight=1)
+        ttk.Label(jobs_head, text="Downloads:").grid(row=0, column=0, sticky="w")
+        self._jobs_summary_var = tk.StringVar(value=self._t("No downloads yet"))
+        self._jobs_summary_label = ttk.Label(jobs_head, textvariable=self._jobs_summary_var, style="Status.TLabel")
+        self._jobs_summary_label.grid(row=0, column=1, sticky="e")
 
         jobs_mid = ttk.Frame(downloads_panel, style="Panel.TFrame")
         jobs_mid.grid(row=1, column=0, sticky="nsew")
         jobs_mid.columnconfigure(0, weight=1)
         jobs_mid.rowconfigure(0, weight=1)
 
-        job_cols = ("job", "status", "progress", "target")
-        self._jobs_tree = ttk.Treeview(jobs_mid, columns=job_cols, show="headings", selectmode="browse", height=6)
-        self._jobs_tree.heading("job", text="Job")
-        self._jobs_tree.heading("status", text="Status")
-        self._jobs_tree.heading("progress", text="Progress")
-        self._jobs_tree.heading("target", text="Target")
-        self._jobs_tree.column("job", width=240, anchor="w")
-        self._jobs_tree.column("status", width=120, anchor="w")
-        self._jobs_tree.column("progress", width=90, anchor="e")
-        self._jobs_tree.column("target", width=420, anchor="w")
+        job_cols = ("job", "status", "progress", "size", "speed", "eta")
+        self._jobs_tree = ttk.Treeview(jobs_mid, columns=job_cols, show="headings", selectmode="extended", height=6)
+        for key, title in (("job", "Job"), ("status", "Status"), ("progress", "Progress"),
+                           ("size", "Size"), ("speed", "Speed"), ("eta", "Left")):
+            self._jobs_tree.heading(key, text=self._t(title))
+        self._jobs_tree.column("job", width=240, minwidth=150, anchor="w", stretch=True)
+        self._jobs_tree.column("status", width=110, minwidth=90, anchor="w", stretch=False)
+        self._jobs_tree.column("progress", width=205, minwidth=180, anchor="w", stretch=False)
+        self._jobs_tree.column("size", width=160, minwidth=135, anchor="e", stretch=False)
+        self._jobs_tree.column("speed", width=95, minwidth=80, anchor="e", stretch=False)
+        self._jobs_tree.column("eta", width=80, minwidth=70, anchor="e", stretch=False)
         self._jobs_tree.grid(row=0, column=0, sticky="nsew")
         self._jobs_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_job_selection_changed())
+        self._jobs_tree.bind("<Double-1>", lambda _e: self._open_job_folder_clicked())
+        self._jobs_tree.bind("<Delete>", lambda _e: self._remove_job_clicked())
+        self._jobs_tree.bind("<Button-3>", self._show_job_menu)
+        self._jobs_tree.bind("<Button-2>", self._show_job_menu)
 
         jobs_scroll = ttk.Scrollbar(jobs_mid, orient="vertical", command=self._jobs_tree.yview)
         jobs_scroll.grid(row=0, column=1, sticky="ns")
         self._jobs_tree.configure(yscrollcommand=jobs_scroll.set)
 
-        job_actions = ttk.Frame(downloads_panel)
-        job_actions.grid(row=2, column=0, sticky="e", pady=(8, 0))
+        jobs_foot = ttk.Frame(downloads_panel, style="Panel.TFrame")
+        jobs_foot.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        jobs_foot.columnconfigure(0, weight=1)
+
+        self._jobs_detail_var = tk.StringVar(value="")
+        self._jobs_detail_label = ttk.Label(
+            jobs_foot, textvariable=self._jobs_detail_var, style="Status.TLabel", anchor="w",
+        )
+        self._jobs_detail_label.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        job_actions = ttk.Frame(jobs_foot)
+        job_actions.grid(row=0, column=1, sticky="e")
         self._btn_job_pause = ttk.Button(job_actions, text=self._t("Pause"), command=self._pause_job_clicked)
         self._btn_job_resume = ttk.Button(job_actions, text=self._t("Resume"), command=self._resume_job_clicked)
-        self._btn_job_pause.grid(row=0, column=0, padx=(0, 6))
-        self._btn_job_resume.grid(row=0, column=1)
+        self._btn_job_retry = ttk.Button(job_actions, text=self._t("Retry"), command=self._retry_job_clicked)
+        self._btn_job_open = ttk.Button(job_actions, text=self._t("Open folder"), command=self._open_job_folder_clicked)
+        self._btn_job_remove = ttk.Button(job_actions, text=self._t("Remove"), command=self._remove_job_clicked)
+        self._btn_job_clear = ttk.Button(job_actions, text=self._t("Clear finished"), command=self._clear_finished_jobs_clicked)
+        for index, button in enumerate((self._btn_job_pause, self._btn_job_resume, self._btn_job_retry,
+                                        self._btn_job_open, self._btn_job_remove, self._btn_job_clear)):
+            button.grid(row=0, column=index, padx=(0, 6) if index < 5 else 0)
         self._set_job_actions_enabled(False)
 
         self._set_remote_actions_enabled(False)
@@ -2264,6 +2806,424 @@ class App(tk.Tk):
             main.rowconfigure(3, weight=0)
         except Exception:
             pass
+
+    # ---- download list helpers -------------------------------------------
+    @staticmethod
+    def _progress_bar(frac: float, width: int = 12) -> str:
+        """A text progress bar - Treeview cannot host a real widget."""
+        frac = max(0.0, min(1.0, float(frac or 0.0)))
+        filled = int(round(frac * width))
+        return "█" * filled + "░" * (width - filled) + f" {frac * 100:5.1f}%"
+
+    @staticmethod
+    def _format_speed(bytes_per_second: float | None) -> str:
+        if not bytes_per_second or bytes_per_second <= 0:
+            return ""
+        return f"{human_bytes(int(bytes_per_second))}/s"
+
+    @staticmethod
+    def _format_eta(seconds: float | None) -> str:
+        if seconds is None or seconds < 0 or seconds > 86400 * 2:
+            return ""
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s"
+        if seconds < 3600:
+            return f"{seconds // 60}m {seconds % 60:02d}s"
+        return f"{seconds // 3600}h {(seconds % 3600) // 60:02d}m"
+
+    def _job_row_values(self, job: dict) -> tuple:
+        frac = float(job.get("progress") or 0.0)
+        done = job.get("done_bytes")
+        total = job.get("total_bytes")
+        if done is not None and total:
+            size = f"{human_bytes(int(done))} / {human_bytes(int(total))}"
+        elif done is not None:
+            size = human_bytes(int(done))
+        else:
+            size = ""
+        status = str(job.get("status") or "")
+        speed = self._format_speed(job.get("speed")) if status == "Downloading" else ""
+        eta = self._format_eta(job.get("eta")) if status == "Downloading" else ""
+        return (
+            str(job.get("label") or job.get("job_id") or ""),
+            status,
+            self._progress_bar(frac),
+            size,
+            speed,
+            eta,
+        )
+
+    _JOB_TAGS = {
+        "Queued": "job_queued", "Downloading": "job_running", "Paused": "job_paused",
+        "Done": "job_done", "Failed": "job_failed", "Cancelled": "job_failed",
+    }
+
+    def _refresh_job_row(self, job_id: str) -> None:
+        job = self._download_jobs.get(job_id)
+        tree = getattr(self, "_jobs_tree", None)
+        if job is None or tree is None:
+            return
+        try:
+            if not tree.winfo_exists():
+                return
+            values = self._job_row_values(job)
+            tag = self._JOB_TAGS.get(str(job.get("status") or ""), "")
+            if job_id in tree.get_children():
+                tree.item(job_id, values=values, tags=(tag,) if tag else ())
+            else:
+                tree.insert("", tk.END, iid=job_id, values=values, tags=(tag,) if tag else ())
+        except Exception:
+            pass
+        self._on_job_selection_changed()
+
+    def _paint_job_tags(self) -> None:
+        """Colour the job rows from the current palette."""
+        tree = getattr(self, "_jobs_tree", None)
+        colors = getattr(self, "_colors", {})
+        if tree is None or not colors:
+            return
+        try:
+            if not tree.winfo_exists():
+                return
+            tree.tag_configure("job_queued", foreground=colors.get("muted"))
+            tree.tag_configure("job_running", foreground=colors.get("accent"))
+            tree.tag_configure("job_paused", foreground=colors.get("muted"))
+            tree.tag_configure("job_done", foreground=colors.get("ok", colors.get("accent")))
+            tree.tag_configure("job_failed", foreground=colors.get("danger"))
+        except Exception:
+            pass
+
+    def _show_job_menu(self, event) -> None:
+        """Right-click menu with the same actions as the buttons."""
+        tree = getattr(self, "_jobs_tree", None)
+        if tree is None:
+            return
+        try:
+            row = tree.identify_row(event.y)
+            if row and row not in tree.selection():
+                tree.selection_set(row)
+            self._on_job_selection_changed()
+        except Exception:
+            pass
+
+        menu = tk.Menu(self, tearoff=0)
+        try:
+            colors = getattr(self, "_menu_colors", None)
+            if colors:
+                menu.configure(**colors)
+        except Exception:
+            pass
+
+        def add(label: str, command, button_name: str) -> None:
+            button = getattr(self, button_name, None)
+            state = "normal"
+            try:
+                if button is not None and str(button.cget("state")) == "disabled":
+                    state = "disabled"
+            except Exception:
+                pass
+            menu.add_command(label=self._t(label), command=command, state=state)
+
+        add("Pause", self._pause_job_clicked, "_btn_job_pause")
+        add("Resume", self._resume_job_clicked, "_btn_job_resume")
+        add("Retry", self._retry_job_clicked, "_btn_job_retry")
+        menu.add_separator()
+        add("Copy URL", self._copy_job_url_clicked, "_btn_job_open")
+        add("Open folder", self._open_job_folder_clicked, "_btn_job_open")
+        menu.add_separator()
+        add("Remove", self._remove_job_clicked, "_btn_job_remove")
+        add("Clear finished", self._clear_finished_jobs_clicked, "_btn_job_clear")
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    def _copy_job_url_clicked(self) -> None:
+        urls = []
+        for job_id in self._selected_job_ids():
+            job = self._download_jobs.get(job_id) or {}
+            url = str(job.get("url") or "")
+            if url:
+                urls.append(url)
+        if not urls:
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(urls))
+            self._set_net_status(self._t("URL copied"))
+        except Exception:
+            pass
+
+    def _update_jobs_summary(self) -> None:
+        """One line above the list: how many jobs are in which state."""
+        var = getattr(self, "_jobs_summary_var", None)
+        if var is None:
+            return
+        jobs = list(getattr(self, "_download_jobs", {}).values())
+        if not jobs:
+            var.set(self._t("No downloads yet"))
+            return
+
+        counts: dict[str, int] = {}
+        total_speed = 0.0
+        remaining = 0
+        for job in jobs:
+            status = str(job.get("status") or "Queued")
+            counts[status] = counts.get(status, 0) + 1
+            if status == "Downloading":
+                try:
+                    total_speed += float(job.get("speed") or 0.0)
+                except Exception:
+                    pass
+                try:
+                    total = job.get("total_bytes")
+                    done = job.get("done_bytes") or 0
+                    if total:
+                        remaining += max(0, int(total) - int(done))
+                except Exception:
+                    pass
+
+        order = ("Downloading", "Queued", "Paused", "Done", "Failed", "Cancelled")
+        parts = [f"{counts[s]} {self._t(s.lower())}" for s in order if counts.get(s)]
+        line = " · ".join(parts)
+        if total_speed > 0:
+            line += f" · {self._format_speed(total_speed)}"
+            if remaining:
+                line += f" · {self._format_eta(remaining / total_speed)} {self._t('left')}"
+        var.set(line)
+
+    # ---- remembering downloads across restarts ---------------------------
+    _DOWNLOAD_STATE_VERSION = 1
+    _SAVED_JOB_KEYS = (
+        "job_id", "url", "target", "sha256", "label", "status", "progress",
+        "done_bytes", "total_bytes", "verify", "note",
+    )
+
+    @property
+    def _downloads_state_path(self) -> Path:
+        return Path.home() / ".ipm_downloads.json"
+
+    def _job_to_dict(self, job: dict) -> dict:
+        out = {}
+        for key in self._SAVED_JOB_KEYS:
+            value = job.get(key)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                out[key] = value
+        # A job that was running when the app closed comes back paused, so the
+        # user decides when to hit the network again.
+        if str(out.get("status")) in ("Downloading", "Queued"):
+            out["status"] = "Paused"
+        return out
+
+    def _save_download_jobs(self, *, force: bool = False) -> None:
+        """Write the job list to disk so a restart does not lose progress."""
+        now = time.monotonic()
+        if not force and now - float(getattr(self, "_downloads_saved_at", 0.0)) < 2.0:
+            return
+        self._downloads_saved_at = now
+
+        jobs = []
+        for job in getattr(self, "_download_jobs", {}).values():
+            try:
+                jobs.append(self._job_to_dict(job))
+            except Exception:
+                continue
+        data = {"version": self._DOWNLOAD_STATE_VERSION, "jobs": jobs}
+        try:
+            self._downloads_state_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_download_jobs(self) -> None:
+        """Bring back the jobs from the last run, paused and ready to resume."""
+        path = self._downloads_state_path
+        try:
+            if not path.exists():
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+
+        restored = 0
+        unfinished = 0
+        highest = 0
+        for raw in (data.get("jobs") or []):
+            if not isinstance(raw, dict):
+                continue
+            url = str(raw.get("url") or "")
+            target = str(raw.get("target") or "")
+            if not url.lower().startswith(("http://", "https://")) or not target:
+                continue
+
+            job_id = str(raw.get("job_id") or "")
+            if not job_id or job_id in self._download_jobs:
+                continue
+            try:
+                highest = max(highest, int(str(job_id).lstrip("dl") or 0))
+            except Exception:
+                pass
+
+            status = str(raw.get("status") or "Paused")
+            if status not in ("Paused", "Done", "Failed", "Cancelled"):
+                status = "Paused"
+
+            # Trust the file on disk over the saved counter.
+            done_bytes = None
+            try:
+                partial = Path(target)
+                if partial.exists():
+                    done_bytes = int(partial.stat().st_size)
+                elif status == "Done":
+                    continue  # the finished file is gone, no point listing it
+            except Exception:
+                done_bytes = None
+
+            total_bytes = raw.get("total_bytes")
+            try:
+                total_bytes = int(total_bytes) if total_bytes else None
+            except Exception:
+                total_bytes = None
+
+            if done_bytes is not None and total_bytes:
+                progress = max(0.0, min(1.0, done_bytes / total_bytes))
+            else:
+                try:
+                    progress = float(raw.get("progress") or 0.0)
+                except Exception:
+                    progress = 0.0
+
+            job = {
+                "job_id": job_id,
+                "url": url,
+                "target": target,
+                "sha256": (str(raw.get("sha256")).lower() if raw.get("sha256") else None),
+                "label": str(raw.get("label") or Path(target).name or job_id),
+                "retries_left": 2,
+                "pause_event": threading.Event(),
+                "status": status,
+                "progress": progress,
+                "done_bytes": done_bytes,
+                "total_bytes": total_bytes,
+                "verify": bool(raw.get("verify")),
+                "note": (str(raw.get("note")) if raw.get("note") else None),
+                "in_queue": False,
+                "restored": True,
+            }
+            if status == "Paused":
+                job["pause_event"].set()
+                unfinished += 1
+
+            self._download_jobs[job_id] = job
+            self._refresh_job_row(job_id)
+            restored += 1
+
+        if restored:
+            try:
+                self._download_job_seq = max(int(self._download_job_seq or 0), highest)
+            except Exception:
+                pass
+            self._update_jobs_summary()
+            if unfinished:
+                self._log(f"Restored {unfinished} unfinished download(s) - select one and press Resume")
+                try:
+                    self._jobs_detail_var.set(
+                        self._t("Unfinished downloads from last time were restored - press Resume to continue.")
+                    )
+                except Exception:
+                    pass
+            else:
+                self._log(f"Restored {restored} download(s) from the last session")
+
+    def _requeue_job(self, job: dict) -> bool:
+        """Hand a job back to the download worker."""
+        try:
+            self._download_queue.put(job)
+            with self._download_queue_lock:
+                self._download_queue_count += 1
+            job["in_queue"] = True
+            return True
+        except Exception:
+            return False
+
+    def _selected_job_ids(self) -> list[str]:
+        try:
+            return [str(item) for item in self._jobs_tree.selection()]
+        except Exception:
+            return []
+
+    def _retry_job_clicked(self) -> None:
+        for job_id in self._selected_job_ids():
+            job = self._download_jobs.get(job_id)
+            if not job or str(job.get("status")) not in ("Failed", "Cancelled"):
+                continue
+            job["retries_left"] = 2
+            job["status"] = "Queued"
+            job["progress"] = 0.0
+            job["cancelled"] = False
+            try:
+                event = job.get("pause_event")
+                if event is not None:
+                    event.clear()
+                self._requeue_job(job)
+                self._log(f"Retrying download: {job.get('label')}")
+            except Exception:
+                continue
+            self._refresh_job_row(job_id)
+        self._save_download_jobs(force=True)
+
+    def _open_job_folder_clicked(self) -> None:
+        for job_id in self._selected_job_ids()[:1]:
+            job = self._download_jobs.get(job_id) or {}
+            target = str(job.get("target") or "")
+            if not target:
+                continue
+            folder = Path(target).parent
+            try:
+                open_explorer(folder)
+            except Exception as exc:
+                self._log(f"Could not open {folder}: {exc}")
+
+    def _remove_job_clicked(self) -> None:
+        for job_id in self._selected_job_ids():
+            job = self._download_jobs.get(job_id)
+            if job is None:
+                continue
+            if str(job.get("status")) == "Downloading":
+                messagebox.showinfo(
+                    self._t("Downloads"),
+                    self._t("Pause or stop the download before removing it from the list."),
+                    parent=self,
+                )
+                continue
+            job["cancelled"] = True
+            self._download_jobs.pop(job_id, None)
+            try:
+                self._jobs_tree.delete(job_id)
+            except Exception:
+                pass
+        self._on_job_selection_changed()
+        self._update_jobs_summary()
+        self._save_download_jobs(force=True)
+
+    def _clear_finished_jobs_clicked(self) -> None:
+        for job_id, job in list(self._download_jobs.items()):
+            if str(job.get("status")) in ("Done", "Failed", "Cancelled"):
+                self._download_jobs.pop(job_id, None)
+                try:
+                    self._jobs_tree.delete(job_id)
+                except Exception:
+                    pass
+        self._on_job_selection_changed()
+        self._update_jobs_summary()
+        self._save_download_jobs(force=True)
 
     def _selected_job_id(self) -> str | None:
         try:
@@ -2276,48 +3236,110 @@ class App(tk.Tk):
 
     def _set_job_actions_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
-        for b in (getattr(self, "_btn_job_pause", None), getattr(self, "_btn_job_resume", None)):
+        for b in (getattr(self, "_btn_job_pause", None), getattr(self, "_btn_job_resume", None),
+                  getattr(self, "_btn_job_retry", None), getattr(self, "_btn_job_open", None),
+                  getattr(self, "_btn_job_remove", None)):
             if not b:
                 continue
-            b.configure(state=state)
+            try:
+                b.configure(state=state)
+            except Exception:
+                pass
 
     def _on_job_selection_changed(self) -> None:
-        jid = self._selected_job_id()
-        self._set_job_actions_enabled(jid is not None)
+        """Only offer the buttons that make sense for the current selection."""
+        selected = [self._download_jobs.get(jid) for jid in self._selected_job_ids()]
+        selected = [job for job in selected if job]
+        statuses = set()
+        for job in selected:
+            statuses.add(str(job.get("status") or ""))
+            try:
+                event = job.get("pause_event")
+                if event is not None and event.is_set():
+                    statuses.add("Paused")
+            except Exception:
+                pass
+
+        def enable(name: str, on: bool) -> None:
+            button = getattr(self, name, None)
+            if not button:
+                return
+            try:
+                button.configure(state="normal" if on else "disabled")
+            except Exception:
+                pass
+
+        enable("_btn_job_pause", bool(statuses & {"Downloading", "Queued"}))
+        enable("_btn_job_resume", bool(statuses & {"Paused"}))
+        enable("_btn_job_retry", bool(statuses & {"Failed", "Cancelled"}))
+        enable("_btn_job_open", len(selected) == 1)
+        enable("_btn_job_remove", bool(selected) and "Downloading" not in statuses)
+        enable("_btn_job_clear", any(
+            str(job.get("status") or "") in ("Done", "Failed", "Cancelled")
+            for job in getattr(self, "_download_jobs", {}).values()
+        ))
+        self._update_job_detail(selected)
+
+    def _update_job_detail(self, selected: list) -> None:
+        """The line under the list: full path / error for the selected job."""
+        var = getattr(self, "_jobs_detail_var", None)
+        if var is None:
+            return
+        if len(selected) != 1:
+            var.set(f"{len(selected)} " + self._t("selected") if selected else "")
+            return
+        job = selected[0]
+        note = str(job.get("note") or "")
+        target = str(job.get("target") or "")
+        text = target
+        if note:
+            text = f"{target}  -  {note}" if target else note
+        if len(text) > 160:
+            text = text[:157] + "..."
+        var.set(text)
 
     def _pause_job_clicked(self) -> None:
-        jid = self._selected_job_id()
-        if not jid:
-            return
-        job = self._download_jobs.get(jid)
-        if not job:
-            return
-        try:
-            ev = job.get("pause_event")
-            if ev is not None:
-                ev.set()
-            job["status"] = "Paused"
-            self._work_q.put(("download_job_update", {"job_id": jid, "status": "Paused"}, None))
-        except Exception:
-            pass
+        for jid in self._selected_job_ids():
+            job = self._download_jobs.get(jid)
+            if not job or str(job.get("status")) not in ("Downloading", "Queued"):
+                continue
+            try:
+                ev = job.get("pause_event")
+                if ev is not None:
+                    ev.set()
+                else:
+                    continue
+                job["status"] = "Paused"
+                job["speed"] = None
+                job["eta"] = None
+                self._work_q.put(("download_job_update", {
+                    "job_id": jid, "status": "Paused", "speed": None, "eta": None,
+                }, None))
+            except Exception:
+                pass
 
     def _resume_job_clicked(self) -> None:
-        jid = self._selected_job_id()
-        if not jid:
-            return
-        job = self._download_jobs.get(jid)
-        if not job:
-            return
-        try:
+        for jid in self._selected_job_ids():
+            job = self._download_jobs.get(jid)
+            if not job:
+                continue
             ev = job.get("pause_event")
-            if ev is not None:
-                ev.clear()
-            # status will be updated by the worker when it starts or continues
-            if job.get("status") == "Paused":
+            # The event is the truth: a late progress message may have relabelled
+            # the row, but the worker is still waiting on it.
+            if str(job.get("status")) != "Paused" and not (ev is not None and ev.is_set()):
+                continue
+            try:
+                if ev is not None:
+                    ev.clear()
+                # A job restored from disk is not in the worker queue any more.
+                if not job.get("in_queue"):
+                    self._requeue_job(job)
+                # the worker sets "Downloading" once it picks the job up again
                 job["status"] = "Queued"
                 self._work_q.put(("download_job_update", {"job_id": jid, "status": "Queued"}, None))
-        except Exception:
-            pass
+            except Exception:
+                pass
+        self._save_download_jobs(force=True)
 
     def _sources_for_category(self, cat: str) -> list[str]:
         linux_mainstream = [
@@ -2782,6 +3804,7 @@ class App(tk.Tk):
                 iid=it.url,
                 values=(it.name, it.url, it.sha256[:12] + "..." if it.sha256 else ""),
             )
+        self._stripe_rows(self._remote_tree)
         self._set_net_status(
             f"Showing {len(shown)} of {len(visible)} ISO(s) (filtered from {len(self._remote_items)})"
         )
@@ -2924,8 +3947,6 @@ class App(tk.Tk):
             self._save_settings_file()
         except Exception:
             pass
-
-       
 
         mode = (getattr(self, "_web_mode_var", None).get() if getattr(self, "_web_mode_var", None) is not None else "Any Website").strip()
         provider = (getattr(self, "_web_provider_var", None).get() if getattr(self, "_web_provider_var", None) is not None else "DuckDuckGo").strip()
@@ -4629,6 +5650,11 @@ class App(tk.Tk):
                         break
                 self._download_queue_count = 0
             self._work_q.put(("download_batch_status", "Download queue cleared", None))
+            for job_id, job in list(getattr(self, "_download_jobs", {}).items()):
+                if str(job.get("status")) in ("Queued", "Paused", "Downloading"):
+                    self._work_q.put(("download_job_update", {
+                        "job_id": job_id, "status": "Cancelled", "speed": None, "eta": None,
+                    }, None))
         except Exception:
             pass
 
@@ -4656,15 +5682,15 @@ class App(tk.Tk):
             "status": "Queued",
             "progress": 0.0,
             "verify": bool(verify),
+            "in_queue": False,
         }
         try:
             self._download_jobs[job_id] = job
-            self._download_queue.put(job)
-            with self._download_queue_lock:
-                self._download_queue_count += 1
+            self._requeue_job(job)
             self._log(f"Queued download: {label}")
             self._work_q.put(("download_batch_status", f"Queued: {label}", None))
             self._work_q.put(("download_job_added", {"job_id": job_id, "label": label, "target": str(target)}, None))
+            self._save_download_jobs(force=True)
         except Exception:
             pass
 
@@ -4678,6 +5704,11 @@ class App(tk.Tk):
             try:
                 with self._download_queue_lock:
                     self._download_queue_count = max(0, int(self._download_queue_count) - 1)
+            except Exception:
+                pass
+
+            try:
+                job["in_queue"] = False
             except Exception:
                 pass
 
@@ -4696,7 +5727,7 @@ class App(tk.Tk):
                     pause_ev = job.get("pause_event")
                     if pause_ev is not None and pause_ev.is_set():
                         # Put it back and skip for now.
-                        self._download_queue.put(job)
+                        self._requeue_job(job)
                         time.sleep(0.2)
                         continue
                 except Exception:
@@ -4721,16 +5752,33 @@ class App(tk.Tk):
                 if jid:
                     self._work_q.put(("download_job_update", {"job_id": jid, "status": "Downloading", "progress": 0.0}, None))
 
-                def prog(frac: float, job_id=jid):
+                def prog(frac: float, done=None, total=None, speed=None, eta=None, job_id=jid):
                     try:
-                        self._work_q.put(("download_job_progress", {"job_id": job_id, "progress": float(frac)}, None))
+                        self._work_q.put(("download_job_progress", {
+                            "job_id": job_id,
+                            "progress": float(frac),
+                            "done_bytes": done,
+                            "total_bytes": total,
+                            "speed": speed,
+                            "eta": eta,
+                        }, None))
+                        self._work_q.put(("download_progress", float(frac), None))
                     except Exception:
                         pass
 
                 self._download_url_to_file(url, target, expected_sha256=(sha if verify else None), progress_cb=prog, resume=True, job=job)
                 self._log(f"Download complete: {label}")
                 if jid:
-                    self._work_q.put(("download_job_update", {"job_id": jid, "status": "Done", "progress": 1.0}, None))
+                    size_done = None
+                    try:
+                        size_done = int(target.stat().st_size)
+                    except Exception:
+                        size_done = None
+                    self._work_q.put(("download_job_update", {
+                        "job_id": jid, "status": "Done", "progress": 1.0,
+                        "done_bytes": size_done, "total_bytes": size_done,
+                        "speed": None, "eta": None,
+                    }, None))
                 self._work_q.put(("download_done", str(target), (sha is not None and verify)))
             except Exception as e:
                 try:
@@ -4744,6 +5792,10 @@ class App(tk.Tk):
 
                 if self._stop_download.is_set():
                     self._log(f"Download cancelled: {label2}")
+                    if jid:
+                        self._work_q.put(("download_job_update", {
+                            "job_id": jid, "status": "Cancelled", "speed": None, "eta": None,
+                        }, None))
                     continue
 
                 if retries_left > 0:
@@ -4752,16 +5804,19 @@ class App(tk.Tk):
                     except Exception:
                         pass
                     self._log(f"Download failed (retrying): {label2} ({e})")
-                    try:
-                        self._download_queue.put(job)
-                        with self._download_queue_lock:
-                            self._download_queue_count += 1
-                    except Exception:
-                        pass
+                    self._requeue_job(job)
+                    if jid:
+                        self._work_q.put(("download_job_update", {
+                            "job_id": jid, "status": "Queued", "speed": None, "eta": None,
+                            "note": str(e),
+                        }, None))
                 else:
                     self._log(f"Download failed: {label2} ({e})")
                     if jid:
-                        self._work_q.put(("download_job_update", {"job_id": jid, "status": "Failed"}, None))
+                        self._work_q.put(("download_job_update", {
+                            "job_id": jid, "status": "Failed", "speed": None, "eta": None,
+                            "note": str(e),
+                        }, None))
                     self._work_q.put(("error_net", f"Download failed: {e}", None))
             finally:
                 try:
@@ -4800,6 +5855,13 @@ class App(tk.Tk):
 
             done = existing
             mode = "ab" if existing > 0 else "wb"
+
+            # Speed / ETA bookkeeping. The average is taken over a short sliding
+            # window so a slow patch does not make the estimate jump around.
+            started = time.monotonic()
+            window: list[tuple[float, int]] = [(started, done)]
+            last_post = 0.0
+
             with target.open(mode) as f:
                 while True:
                     if self._stop_download.is_set():
@@ -4812,6 +5874,8 @@ class App(tk.Tk):
                                 if self._stop_download.is_set():
                                     raise RuntimeError("Download cancelled")
                                 time.sleep(0.2)
+                                # Ignore the paused time when measuring speed.
+                                window = [(time.monotonic(), done)]
                     except Exception:
                         pass
 
@@ -4820,11 +5884,32 @@ class App(tk.Tk):
                         break
                     f.write(chunk)
                     done += len(chunk)
-                    if total_bytes:
-                        frac = done / total_bytes
+
+                    now = time.monotonic()
+                    window.append((now, done))
+                    while len(window) > 2 and now - window[0][0] > 8.0:
+                        window.pop(0)
+
+                    speed = None
+                    eta = None
+                    try:
+                        span = now - window[0][0]
+                        if span > 0.35:
+                            speed = (done - window[0][1]) / span
+                            if speed > 0 and total_bytes:
+                                eta = max(0.0, (total_bytes - done) / speed)
+                    except Exception:
+                        speed = None
+
+                    frac = (done / total_bytes) if total_bytes else 0.0
+                    if now - last_post >= 0.25 or done >= (total_bytes or 0):
+                        last_post = now
                         if progress_cb is not None:
-                            progress_cb(frac)
-                        else:
+                            try:
+                                progress_cb(frac, done, total_bytes, speed, eta)
+                            except TypeError:
+                                progress_cb(frac)
+                        elif total_bytes:
                             self._work_q.put(("download_progress", frac, None))
 
         if expected_sha256:
@@ -4904,8 +5989,20 @@ class App(tk.Tk):
         self._set_status("Scanning...")
         self._set_actions_enabled(False)
 
+        self._set_scan_running(True)
         self._scan_thread = threading.Thread(target=self._scan_worker, args=(folders,), daemon=True)
         self._scan_thread.start()
+
+    def _set_scan_running(self, running: bool) -> None:
+        """Only offer Stop while a scan is actually going."""
+        for name, on in (("_btn_scan", not running), ("_btn_stop_scan", running)):
+            button = getattr(self, name, None)
+            if button is None:
+                continue
+            try:
+                button.configure(state="normal" if on else "disabled")
+            except Exception:
+                pass
 
     def _stop_scan_clicked(self):
         self._stop_scan.set()
@@ -4990,7 +6087,18 @@ class App(tk.Tk):
                 values=(item.name, info, str(item.path), human_bytes(item.size_bytes), m),
             )
 
+        self._stripe_rows(self._tree)
         self._set_status(f"Found {len(visible)} ISO(s) (filtered from {len(self._items)})")
+        try:
+            total_size = sum(int(getattr(i, "size_bytes", 0) or 0) for i in visible)
+            if visible:
+                self._local_count_var.set(
+                    f"{len(visible)} / {len(self._items)} ISO  ·  {human_bytes(total_size)}"
+                )
+            else:
+                self._local_count_var.set("")
+        except Exception:
+            pass
         self._set_actions_enabled(False)
 
     def _on_selection_changed(self):
@@ -5281,7 +6389,9 @@ class App(tk.Tk):
                     else:
                         self._set_net_status(f"Added {added} older ISO(s), {len(self._remote_items)} total")
                 elif kind == "scan_done":
-                    (found, elapsed), cancelled = payload, extra
+                    cancelled = bool(extra)
+                    found, elapsed = payload if payload else ([], 0.0)
+                    self._set_scan_running(False)
                     self._progress.stop()
                     self._progress.configure(mode="determinate")
                     self._progress["value"] = 0
@@ -5377,67 +6487,46 @@ class App(tk.Tk):
                     try:
                         info = payload if isinstance(payload, dict) else {}
                         jid = str(info.get("job_id") or "")
-                        label = str(info.get("label") or jid)
-                        target = str(info.get("target") or "")
-                        if jid and hasattr(self, "_jobs_tree") and self._jobs_tree.winfo_exists():
-                            if jid not in self._jobs_tree.get_children():
-                                self._jobs_tree.insert("", tk.END, iid=jid, values=(label, "Queued", "0%", target))
-                    except Exception:
-                        pass
-                elif kind == "download_job_progress":
-                    try:
-                        info = payload if isinstance(payload, dict) else {}
-                        jid = str(info.get("job_id") or "")
-                        frac = float(info.get("progress") or 0.0)
                         if jid:
-                            job = self._download_jobs.get(jid)
-                            if job is not None:
-                                job["progress"] = frac
-                            if hasattr(self, "_jobs_tree") and self._jobs_tree.winfo_exists():
-                                try:
-                                    vals = list(self._jobs_tree.item(jid, "values"))
-                                except Exception:
-                                    vals = []
-                                while len(vals) < 4:
-                                    vals.append("")
-                                vals[2] = f"{int(max(0.0, min(1.0, frac)) * 100.0)}%"
-                                self._jobs_tree.item(jid, values=tuple(vals))
+                            self._refresh_job_row(jid)
+                            self._update_jobs_summary()
                     except Exception:
                         pass
-                elif kind == "download_job_update":
+                elif kind in ("download_job_progress", "download_job_update"):
                     try:
                         info = payload if isinstance(payload, dict) else {}
                         jid = str(info.get("job_id") or "")
                         if not jid:
                             continue
-                        status = info.get("status")
-                        prog = info.get("progress")
                         job = self._download_jobs.get(jid)
                         if job is not None:
+                            status = info.get("status")
                             if isinstance(status, str) and status:
                                 job["status"] = status
-                            if prog is not None:
+                            elif kind == "download_job_progress":
+                                # A progress message posted just before the user
+                                # hit Pause must not flip the job back to running.
+                                paused = False
                                 try:
-                                    job["progress"] = float(prog)
+                                    event = job.get("pause_event")
+                                    paused = bool(event is not None and event.is_set())
                                 except Exception:
-                                    pass
-                        if hasattr(self, "_jobs_tree") and self._jobs_tree.winfo_exists():
-                            if jid not in self._jobs_tree.get_children():
-                                label = str(job.get("label") or jid) if job else jid
-                                target = str(job.get("target") or "") if job else ""
-                                self._jobs_tree.insert("", tk.END, iid=jid, values=(label, "", "0%", target))
-                            vals = list(self._jobs_tree.item(jid, "values"))
-                            while len(vals) < 4:
-                                vals.append("")
-                            if isinstance(status, str) and status:
-                                vals[1] = status
-                            if prog is not None:
-                                try:
-                                    f = float(prog)
-                                    vals[2] = f"{int(max(0.0, min(1.0, f)) * 100.0)}%"
-                                except Exception:
-                                    pass
-                            self._jobs_tree.item(jid, values=tuple(vals))
+                                    paused = False
+                                if not paused and str(job.get("status")) != "Paused":
+                                    job["status"] = "Downloading"
+                                else:
+                                    info = dict(info)
+                                    info["speed"] = None
+                                    info["eta"] = None
+                            for key in ("progress", "done_bytes", "total_bytes", "speed", "eta"):
+                                if key in info:
+                                    job[key] = info.get(key)
+                            note = info.get("note")
+                            if note:
+                                job["note"] = str(note)
+                        self._refresh_job_row(jid)
+                        self._update_jobs_summary()
+                        self._save_download_jobs(force=(kind == "download_job_update"))
                     except Exception:
                         pass
                 elif kind == "download_batch_progress":
