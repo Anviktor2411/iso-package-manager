@@ -45,7 +45,7 @@ jobs:
           python scripts/build_theme_index.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add themes
+          git add themes docs/shop
           git commit -m "Add theme: ${THEME_NAME} (#${NUMBER})" || echo "nothing to commit"
           git push
 
