@@ -28,7 +28,7 @@ import shlex
 import sys
 
 APP_NAME = "ISO Package Manager"
-APP_VERSION = "0.9"
+APP_VERSION = "0.10"
 
 MENU = """
   +--------------------------------------------------+

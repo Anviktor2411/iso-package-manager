@@ -5,13 +5,13 @@ The result is ``dist/iso-package-manager-<version>.pyz``: a self-contained
 Python zipapp that starts with a ``#!/usr/bin/env python3`` shebang.  On
 Linux/macOS the file *is* the program once it is marked executable::
 
-    chmod +x dist/iso-package-manager-0.9.pyz
-    ./dist/iso-package-manager-0.9.pyz          # asks UI or Terminal
+    chmod +x dist/iso-package-manager-0.10.pyz
+    ./dist/iso-package-manager-0.10.pyz          # asks UI or Terminal
 
 On Windows it can still be run, which is what the build machine uses to
 smoke-test the archive::
 
-    python dist\\iso-package-manager-0.9.pyz --version
+    python dist\\iso-package-manager-0.10.pyz --version
 
 The ``themes/`` folder is baked in as ``<archive>/themes``, which
 ``ipm_themes.py`` reads straight out of the zip - so the one downloaded file

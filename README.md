@@ -211,14 +211,14 @@ Two different Linux executables can be produced:
 **Portable `.pyz` — buildable from any machine, including Windows:**
 
 ```bash
-python build_pyz.py                                # -> dist/iso-package-manager-0.9.pyz
-chmod +x dist/iso-package-manager-0.9.pyz
-./dist/iso-package-manager-0.9.pyz                 # asks: UI or Terminal
-./dist/iso-package-manager-0.9.pyz --cli search ubuntu -n 5
-./dist/iso-package-manager-0.9.pyz --gui
+python build_pyz.py                                # -> dist/iso-package-manager-0.10.pyz
+chmod +x dist/iso-package-manager-0.10.pyz
+./dist/iso-package-manager-0.10.pyz                 # asks: UI or Terminal
+./dist/iso-package-manager-0.10.pyz --cli search ubuntu -n 5
+./dist/iso-package-manager-0.10.pyz --gui
 ```
 
-On Windows the same archive runs as `python dist\iso-package-manager-0.9.pyz`.
+On Windows the same archive runs as `python dist\iso-package-manager-0.10.pyz`.
 
 **Native ELF — run this on Linux:**
 
@@ -254,7 +254,7 @@ that path has not been verified on a Mac in this project.
 ## Notes
 
 - **Mount + Open** / **Eject ISO** work on Windows, Linux and macOS — see [Mounting an ISO](#mounting-an-iso).
-- Current version: **V0.9**.
+- Current version: **V0.10**.
 - If `pywebview` is not installed, source pages open in your default browser.
 
 ### Archive / "older versions" settings
@@ -289,6 +289,15 @@ Environment variables (optional):
   - **Open Source Page** goes to Microsoft's official download page for 10/11, the Windows 8 hub page for 8/8.1, and the Internet Archive search for 7/Vista/XP and the LTSC editions (Microsoft does not publish LTSC media on its consumer download pages).
   - **Load more** widens the catalogue search for more (older) builds.
   - The archive copies are user-contributed. Verify the SHA-256 of a downloaded ISO against Microsoft's official hash list before installing, and note that installing Windows still requires a valid licence key.
+
+- **Windows Server sources**
+  - Pick **Category: Windows Server** and choose a release (`Windows Server 2025`, `Windows Server 2022`, `Windows Server 2019`, `Windows Server 2016`, `Windows Server 2012 R2`, `Windows Server 2012`, `Windows Server 2008 R2`) or `Windows Server (all versions)` for the whole line, newest first.
+  - Server releases are also reachable from **Category: Windows** (and **All**); typing `windows server`, `win server` or a specific build such as `windows server 2012 r2` in **Web Search** lists them too. Rows are tagged `[Srv 2025]`, `[Srv 2022]`, `[Srv 2019]`, `[Srv 2016]`, `[Srv 2012 R2]`, `[Srv 2012]` or `[Srv 2008 R2]`.
+  - Current releases (2016 and newer) resolve from Microsoft's Evaluation Center media and the Internet Archive; retired releases (2012 R2 and older) come from archive copies, which is why 2008 R2 returns evaluation (GRMSX*) and volume-licence kits rather than retail discs.
+  - Server results are filtered the same way as client media, plus two server-specific guards: desktop client discs are kept out of Server lists (a Windows 7 disc that shares an archive item with a 2008 R2 disc no longer shows up under `Windows Server 2008 R2`), and non-OS server products are excluded (`SQL Server`, `MSSQL`, `Exchange Server`, `SharePoint`, `Lync Server`, `System Center`, `BizTalk`, `MultiPoint Server`). Hyper-V Server is still listed, since it is a Windows Server install image.
+  - Server 2012 and 2012 R2 share one base title, so R2 media is reported under `Windows Server 2012 R2` and never under `Windows Server 2012`.
+  - **Open Source Page** goes to Microsoft's Evaluation Center for current Server releases and to the Internet Archive search for retired ones.
+  - Server media is for learning and lab use. Install only in environments you are licensed and authorised to run, and verify hashes before use.
 
 - **Multi-download**
   - Select multiple rows in the ISO list (Ctrl/Shift) and click **Download**.

@@ -82,6 +82,12 @@ try:
 except Exception:  # pragma: no cover - theme packs are optional
     _ipm_themes = None
 
+APP_VERSION = "0.10"
+try:  # the launcher owns the version number; this is only a fallback
+    from ipm_launcher import APP_VERSION as APP_VERSION  # noqa: F811
+except Exception:  # pragma: no cover - running without the launcher
+    pass
+
 try:  # the in-app Theme Shop is optional as well
     import ipm_shop as _ipm_shop
 except Exception:  # pragma: no cover
@@ -530,7 +536,7 @@ def open_url_in_app(url: str, title: str = "Browser", ipc_path: str | None = Non
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ISO Package Manager V0.9")
+        self.title(f"ISO Package Manager V{APP_VERSION}")
         want_w, want_h = 980, 640
         try:
             want_w = max(720, min(want_w, self.winfo_screenwidth() - 80))

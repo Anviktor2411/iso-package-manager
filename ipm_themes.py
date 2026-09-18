@@ -121,6 +121,11 @@ __all__ = [
 
 SCHEMA_VERSION = 1
 APP_NAME = "ISO Package Manager"
+APP_VERSION = "0.10"
+try:  # the launcher owns the version number; this is only a fallback
+    from ipm_launcher import APP_VERSION as APP_VERSION  # noqa: F811
+except Exception:  # pragma: no cover - running without the launcher
+    pass
 
 PACK_SUFFIXES: tuple[str, ...] = (".ipmtheme.json", ".ipmtheme", ".json")
 
@@ -671,7 +676,7 @@ def _builtin_theme(theme_id: str) -> Theme:
         font_family=BUILTIN_FONTS[theme_id],
         base=theme_id,
         author=APP_NAME,
-        version="0.9",
+        version=APP_VERSION,
         description=f"Built-in {BUILTIN_NAMES[theme_id]} theme.",
         license="Same as the application",
         kind="builtin",
@@ -725,7 +730,7 @@ def container_dir() -> Path:
     """The folder the running program lives in - where ``themes`` is expected.
 
     * a plain checkout (``python main.py``) -> the folder holding the modules;
-    * a zipapp (``iso-package-manager-0.9.pyz``) -> the folder with the ``.pyz``;
+    * a zipapp (``iso-package-manager-0.10.pyz``) -> the folder with the ``.pyz``;
     * a one-file ``.exe`` -> the folder with the ``.exe``.
     """
     if getattr(sys, "frozen", False):
@@ -1920,7 +1925,7 @@ def ansi_preview(theme: str | Theme | None, *, color: bool | None = None, width:
         return f"{prefix}{text}{_RESET}" if prefix else text
 
     lines: list[str] = []
-    title = f"{APP_NAME} V0.9"
+    title = f"{APP_NAME} V{APP_VERSION}"
     lines.append(paint(f" {title}".ljust(width), c["text"], c["bg"]))
     lines.append(paint(" " + "-" * (width - 1), c["muted"], c["bg"]))
     tab = "  Local   Internet   Settings   Logs  "
