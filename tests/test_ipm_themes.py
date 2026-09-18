@@ -652,6 +652,50 @@ class TestStyleKwargs(unittest.TestCase):
             self.assertEqual(theme.colors["tree_bg"], theme.colors["panel"])
             self.assertEqual(theme.colors["tree_heading_fg"], theme.colors["text"])
 
+    def test_dark_pack_on_a_light_base_keeps_the_table_readable(self):
+        """A hand-written pack lists only the ten required colours.
+
+        The optional ones must follow the pack's own palette; inheriting the
+        light base's white table background would leave light text on white.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = {
+                "schema_version": 1,
+                "id": "darkxp",
+                "name": "Dark XP",
+                "author": "Tester",
+                "version": "1.0.0",
+                "license": "MIT",
+                "base": "windows-xp",
+                "colors": {
+                    "bg": "#131e10",
+                    "panel": "#1e2e1a",
+                    "text": "#e2ebe0",
+                    "muted": "#a7b9a2",
+                    "accent": "#dd3cbd",
+                    "accent_active": "#c723a7",
+                    "danger": "#da2f2f",
+                    "danger_active": "#ba2121",
+                    "border": "#31432d",
+                    "selection": "#8f247a",
+                },
+            }
+            path = Path(tmp) / "darkxp.ipmtheme.json"
+            path.write_text(json.dumps(pack), encoding="utf-8")
+            theme = T.load_pack_file(path)
+
+            self.assertEqual(theme.colors["tree_bg"], "#1e2e1a")
+            self.assertEqual(theme.colors["tree_heading_bg"], "#131e10")
+            self.assertEqual(theme.colors["tab_bg"], "#1e2e1a")
+            self.assertEqual(theme.colors["tab_selected_bg"], "#131e10")
+
+            ratio = T.contrast_ratio(theme.colors["text"], theme.colors["tree_bg"])
+            self.assertGreaterEqual(ratio, 4.5)
+
+            errors, warnings = T.validate_pack(pack)
+            self.assertEqual(errors, [])
+            self.assertEqual([w for w in warnings if "contrast" in w], [])
+
 
 class TestMenu(unittest.TestCase):
     def test_structure_has_builtins_then_separator_then_packs(self):
