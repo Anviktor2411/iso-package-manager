@@ -49,6 +49,20 @@ if not errorlevel 1 (
     echo   pywebview not installed - the in-app browser falls back to the default browser
 )
 
+REM Carry a CA bundle inside the .exe so HTTPS does not depend on whatever
+REM certificate store the machine running it happens to have.
+python -c "import certifi" >nul 2>nul
+if errorlevel 1 (
+    echo   certifi missing - installing it so the .exe carries a CA bundle
+    python -m pip install --disable-pip-version-check --quiet certifi >nul 2>nul
+)
+set "CERTS="
+python -c "import certifi" >nul 2>nul
+if not errorlevel 1 (
+    echo   bundling the certifi CA bundle
+    set "CERTS=--collect-data certifi"
+)
+
 echo.
 echo [3/4] Building (this takes a minute) ...
 python -m PyInstaller --noconfirm --clean --onefile --console ^
@@ -58,8 +72,8 @@ python -m PyInstaller --noconfirm --clean --onefile --console ^
     --hidden-import ipm_windows --hidden-import ipm_winops --hidden-import ipm_http ^
     --hidden-import ipm_models --hidden-import ipm_utils ^
     --hidden-import main --hidden-import ipm_themes --hidden-import ipm_shop ^
-    --add-data "%~dp0themes;themes" ^
-    %EXTRA% "%ENTRY%"
+    --add-data "themes;themes" ^
+    %CERTS% %EXTRA% "%ENTRY%"
 if errorlevel 1 (
     echo   [x] build failed - scroll up for the PyInstaller error.
     pause

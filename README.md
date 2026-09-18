@@ -230,14 +230,14 @@ Two different Linux executables can be produced:
 **Portable `.pyz` — buildable from any machine, including Windows:**
 
 ```bash
-python build_pyz.py                                # -> dist/iso-package-manager-0.10.pyz
-chmod +x dist/iso-package-manager-0.10.pyz
-./dist/iso-package-manager-0.10.pyz                 # asks: UI or Terminal
-./dist/iso-package-manager-0.10.pyz --cli search ubuntu -n 5
-./dist/iso-package-manager-0.10.pyz --gui
+python build_pyz.py                                # -> dist/iso-package-manager-0.10.1.pyz
+chmod +x dist/iso-package-manager-0.10.1.pyz
+./dist/iso-package-manager-0.10.1.pyz                 # asks: UI or Terminal
+./dist/iso-package-manager-0.10.1.pyz --cli search ubuntu -n 5
+./dist/iso-package-manager-0.10.1.pyz --gui
 ```
 
-On Windows the same archive runs as `python dist\iso-package-manager-0.10.pyz`.
+On Windows the same archive runs as `python dist\iso-package-manager-0.10.1.pyz`.
 
 **Native ELF — run this on Linux:**
 
@@ -273,7 +273,7 @@ that path has not been verified on a Mac in this project.
 ## Notes
 
 - **Mount + Open** / **Eject ISO** work on Windows, Linux and macOS — see [Mounting an ISO](#mounting-an-iso).
-- Current version: **V0.10**. It is set in one place (`ipm_launcher.py`) and changed
+- Current version: **V0.10.1**. It is set in one place (`ipm_launcher.py`) and changed
   with `python scripts/bump_version.py <new version>` — see
   [docs/RELEASING.md](docs/RELEASING.md).
 - If `pywebview` is not installed, source pages open in your default browser.

@@ -121,7 +121,7 @@ __all__ = [
 
 SCHEMA_VERSION = 1
 APP_NAME = "ISO Package Manager"
-APP_VERSION = "0.10"
+APP_VERSION = "0.10.1"
 try:  # the launcher owns the version number; this is only a fallback
     from ipm_launcher import APP_VERSION as APP_VERSION  # noqa: F811
 except Exception:  # pragma: no cover - running without the launcher
@@ -730,7 +730,7 @@ def container_dir() -> Path:
     """The folder the running program lives in - where ``themes`` is expected.
 
     * a plain checkout (``python main.py``) -> the folder holding the modules;
-    * a zipapp (``iso-package-manager-0.10.pyz``) -> the folder with the ``.pyz``;
+    * a zipapp (``iso-package-manager-0.10.1.pyz``) -> the folder with the ``.pyz``;
     * a one-file ``.exe`` -> the folder with the ``.exe``.
     """
     if getattr(sys, "frozen", False):

@@ -82,7 +82,7 @@ try:
 except Exception:  # pragma: no cover - theme packs are optional
     _ipm_themes = None
 
-APP_VERSION = "0.10"
+APP_VERSION = "0.10.1"
 try:  # the launcher owns the version number; this is only a fallback
     from ipm_launcher import APP_VERSION as APP_VERSION  # noqa: F811
 except Exception:  # pragma: no cover - running without the launcher
