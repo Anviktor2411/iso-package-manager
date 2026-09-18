@@ -15,8 +15,11 @@ A simple GUI app for finding, managing, and downloading `.iso` files.
 - **Internet** tab
   - Browse curated sources and list available ISO downloads
   - **Windows** category: Microsoft Windows 11, 10, 8.1, 8, 7, Vista and XP install media, plus the LTSC editions (Windows 11 / 10 Enterprise LTSC and their IoT Enterprise LTSC variants), from the Internet Archive catalogues
-  - Download queue with per-file job list + progress
-  - Pause / resume per download job
+  - Download queue with a job list showing progress, transferred size, speed and ETA
+  - Pause / resume, retry a failed job, open the target folder, remove or clear finished
+    jobs - all of it works on several selected jobs at once
+  - **Unfinished downloads are remembered.** Close the app mid-download, reopen it and
+    press **Resume**: it continues from where it stopped instead of starting over
   - Optional auto-verify (SHA-256) when a checksum is known
   - Open official source pages
   - Multi-select ISOs in the list and download multiple files in one operation
@@ -30,22 +33,28 @@ A simple GUI app for finding, managing, and downloading `.iso` files.
     - First reveals more already-fetched rows
     - Then (when all fetched items are already shown) fetches older/archived versions from official archives
 - **Settings** tab
-  - Persist theme, language, startup tab, scan folders, provider settings, and other options
+  - Theme, language, startup tab, scan folders and search provider settings, grouped into
+    cards with a short explanation under each field
+  - Everything is saved to your user profile and applied immediately
 - **Logs** tab
   - In-app log viewer for errors and status updates
 - **Themes**
   - Switch between `Default`, `Modern Dark`, `Windows XP`, and `Graphical` from the **Theme** menu
+  - **Theme -> Get more themes...** opens the community shop *inside the app*: search,
+    preview the palette, install and switch to a theme without touching the website
   - **Theme packs** - drop any `*.ipmtheme.json` file into a `themes` folder and it shows up
-    in the same menu, after a separator. No rebuild, no code: five packs ship with the
-    download (Catppuccin Mocha, Dracula, Gruvbox Dark, Nord, Solarized Light) and a fresh
-    `.pyz` already carries them *inside* the archive, so even the single downloaded file
-    has themes to pick from
+    in the same menu, after a separator. No rebuild, no code: a set of packs ships with the
+    download (Catppuccin Mocha, Dracula, Gruvbox Dark, Nord, Solarized Light, plus whatever
+    has been accepted into the shop since) and a fresh `.pyz` already carries them *inside*
+    the archive, so even the single downloaded file has themes to pick from
   - Packs are looked for in `IPM_THEMES_DIR`, then the `themes` folder next to the app,
     then `~/.ipm/themes`, then `themes/` inside the running `.pyz` / PyInstaller bundle -
     the first folder that has a given id wins, so your own copy always overrides the packed-in one
   - Command line: `ipm_cli.py themes [--preview]`, and for authors
     `python tools/ipmtheme.py list | validate | new | install | preview | bundle`
-  - Visual editor: `python tools/theme_editor.py` (live preview, WCAG contrast checks, presets)
+  - Visual editor: `python tools/theme_editor.py` - live preview of every tab, WCAG contrast
+    checks, colour-vision simulation (protanopia, deuteranopia, tritanopia, greyscale),
+    palette import from a list of hex codes, presets and drafts
   - Docs: [`docs/THEME_FORMAT.md`](docs/THEME_FORMAT.md) (every field),
     [`docs/THEME_EDITOR.md`](docs/THEME_EDITOR.md) (the editor),
     [`docs/SHARING.md`](docs/SHARING.md) (publishing a pack),
@@ -64,16 +73,26 @@ See also: [Search Guide](SEARCH_GUIDE.md)
 A community gallery and theme editor for ISO Package Manager, served by GitHub Pages
 from the [`docs/`](docs/) folder. No account is needed to browse or download.
 
+The same shop is reachable from inside the app under **Theme -> Get more themes...**,
+which is the quickest way to install one. The website is where you *make* and *upload* themes.
+
 - **Shop** - every approved theme with a screenshot or a live mock-up, search, sorting
   and filters (dark / light / base theme). Open a theme to see its full palette and
   download it as `.ipmtheme.json` or `.ipmtheme.zip` (pack + screenshot)
-- **Editor** - change the name, all 17 colours, font and style options with a live preview,
-  a random palette button, a one-click readability fix and the same checks the app runs.
-  Start from scratch or open any shop theme and remix it
+- **Editor** - change the name, all 17 colours, font and style options with a live preview
+  of every app tab, a random palette button and the same checks the app runs. It also has
+  WCAG contrast rows with per-row fixes, colour-vision simulation, harmony generators,
+  paste-a-palette import, undo/redo, drafts saved in the browser and a share link that
+  carries the whole theme. Start from scratch or open any shop theme and remix it
 - **Upload** - drop your `.ipmtheme.json` / `.zip` and a screenshot (PNG, JPG or WebP,
   up to 3 MB) and press **Continue on GitHub**. Needs a free GitHub account
 
 ### Installing a theme from the shop
+
+The easy way: **Theme -> Get more themes...** in the app, pick a theme, press
+**Install and use**. Nothing to download or copy by hand.
+
+By hand, if you prefer:
 
 1. Download the `.ipmtheme.json` or `.ipmtheme.zip`
 2. `python tools/ipmtheme.py install <file>` - or copy the `.json` into the `themes`
@@ -254,7 +273,9 @@ that path has not been verified on a Mac in this project.
 ## Notes
 
 - **Mount + Open** / **Eject ISO** work on Windows, Linux and macOS — see [Mounting an ISO](#mounting-an-iso).
-- Current version: **V0.10**.
+- Current version: **V0.10**. It is set in one place (`ipm_launcher.py`) and changed
+  with `python scripts/bump_version.py <new version>` — see
+  [docs/RELEASING.md](docs/RELEASING.md).
 - If `pywebview` is not installed, source pages open in your default browser.
 
 ### Archive / "older versions" settings
