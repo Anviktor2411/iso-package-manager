@@ -57,6 +57,8 @@ python -m PyInstaller --noconfirm --clean --onefile --console ^
     --hidden-import ipm_cli --hidden-import ipm_ia --hidden-import ipm_search ^
     --hidden-import ipm_windows --hidden-import ipm_winops --hidden-import ipm_http ^
     --hidden-import ipm_models --hidden-import ipm_utils ^
+    --hidden-import main --hidden-import ipm_themes ^
+    --add-data "themes;themes" ^
     %EXTRA% "%ENTRY%"
 if errorlevel 1 (
     echo   [x] build failed - scroll up for the PyInstaller error.
