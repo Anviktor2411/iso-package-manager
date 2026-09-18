@@ -61,12 +61,12 @@ EDITOR_VERSION = "1.0"
 
 try:  # Tk is optional so --check works on a headless machine
     import tkinter as tk
-    from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
+    from tkinter import colorchooser, filedialog, font as tkfont, messagebox, simpledialog, ttk
 
     TK_ERROR = ""
 except Exception as exc:  # pragma: no cover - depends on the machine
     tk = None  # type: ignore[assignment]
-    colorchooser = filedialog = tkfont = messagebox = ttk = None  # type: ignore[assignment]
+    colorchooser = filedialog = tkfont = messagebox = simpledialog = ttk = None  # type: ignore[assignment]
     TK_ERROR = f"{exc.__class__.__name__}: {exc}"
 
 TK_AVAILABLE = tk is not None
@@ -436,8 +436,97 @@ def contrast_lines(rows: Sequence[tuple[str, str, float | None, float, bool]]) -
             lines.append(f"  n/a  {label:<26} {'-':>9}  (min {minimum:.1f}:1)")
         else:
             mark = " ok " if passed else "low "
-            lines.append(f"  {mark} {label:<26} {ratio_text:>9}  (min {minimum:.1f}:1)")
+            # WCAG: 4.5 is AA for body text, 7.0 is AAA; large text (min 3.0) is
+            # AA at 3.0 and AAA at 4.5.
+            aaa_min = 7.0 if minimum >= 4.5 else 4.5
+            grade = "AAA" if ratio >= aaa_min else ("AA " if passed else "-- ")
+            lines.append(f"  {mark} {label:<26} {ratio_text:>9}  {grade}  (min {minimum:.1f}:1)")
     return lines
+
+
+#: Colour-vision simulation matrices (Viénot/Brettel style, good enough to spot
+#: a palette that falls apart for a colour-blind user).
+VISION_MATRICES: dict[str, tuple[tuple[float, float, float], ...]] = {
+    "protanopia": ((0.567, 0.433, 0.0), (0.558, 0.442, 0.0), (0.0, 0.242, 0.758)),
+    "deuteranopia": ((0.625, 0.375, 0.0), (0.7, 0.3, 0.0), (0.0, 0.3, 0.7)),
+    "tritanopia": ((0.95, 0.05, 0.0), (0.0, 0.433, 0.567), (0.0, 0.475, 0.525)),
+}
+VISION_MODES = ("normal", "protanopia", "deuteranopia", "tritanopia", "greyscale")
+
+
+def simulate_color(value: Any, mode: str) -> Any:
+    """``value`` as a person with *mode* colour vision would see it."""
+    if not mode or mode == "normal" or not isinstance(value, str):
+        return value
+    rgb = T.to_rgb(value)
+    if rgb is None:
+        return value
+    if mode == "greyscale":
+        grey = round(0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2])
+        return "#%02x%02x%02x" % (grey, grey, grey)
+    matrix = VISION_MATRICES.get(mode)
+    if matrix is None:
+        return value
+    out = []
+    for row in matrix:
+        channel = row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2]
+        out.append(max(0, min(255, round(channel))))
+    return "#%02x%02x%02x" % tuple(out)
+
+
+def simulate_state(state: Mapping[str, Any], mode: str) -> dict[str, Any]:
+    """A copy of a preview state with every colour run through the simulation."""
+    out = dict(state)
+    if not mode or mode == "normal":
+        return out
+    for key, value in list(out.items()):
+        if isinstance(value, str) and T.is_color(value):
+            out[key] = simulate_color(value, mode)
+    return out
+
+
+def palette_from_hex_list(text: str, current: Mapping[str, Any]) -> dict[str, str]:
+    """Build a palette from a pasted list of hex colours (or a Coolors link)."""
+    source = text.strip()
+    if "coolors.co" in source:
+        source = " ".join("#" + part for part in source.rstrip("/").split("/")[-1].split("-"))
+    found: list[str] = []
+    for match in re.findall(r"#?[0-9a-fA-F]{6}\b", source):
+        hex_value = match if match.startswith("#") else "#" + match
+        if T.is_color(hex_value) and hex_value.lower() not in found:
+            found.append(hex_value.lower())
+    if len(found) < 3:
+        raise T.ThemeError("paste at least three hex colours, for example #1e1e2e #cdd6f4 #89b4fa")
+
+    def lum(hex_value: str) -> float:
+        rgb = T.to_rgb(hex_value) or (0, 0, 0)
+        channels = []
+        for raw in rgb:
+            value = raw / 255
+            channels.append(value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    ordered = sorted(found, key=lum)
+    darkest, lightest = ordered[0], ordered[-1]
+    dark = lum(darkest) + lum(lightest) < 1.0
+    background, foreground = (darkest, lightest) if dark else (lightest, darkest)
+    middle = ordered[1:-1] or [found[0]]
+    accent = middle[len(middle) // 2]
+    colors = dict(current)
+    colors.update({
+        "bg": background,
+        "text": foreground,
+        "panel": T.mix(background, foreground, 0.12),
+        "muted": T.mix(foreground, background, 0.35),
+        "accent": accent,
+        "accent_active": accent,
+        "border": T.mix(background, foreground, 0.25),
+        "selection": accent,
+        "accent_text": T.best_text_on(accent),
+        "selection_fg": T.best_text_on(accent),
+    })
+    fixed, _notes = T.auto_fix_colors(colors)
+    return {k: v for k, v in fixed.items() if k in T.COLOR_KEYS}
 
 
 def apply_generator(pack: Mapping[str, Any], key: str, *, seed: Any = None) -> dict[str, Any]:
@@ -670,6 +759,9 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         file_menu.add_command(label="Make a shareable bundle (.zip)...", command=self.action_bundle)
         file_menu.add_separator()
         file_menu.add_command(label="Copy JSON", accelerator="Ctrl+J", command=self.action_copy_json)
+        file_menu.add_separator()
+        file_menu.add_command(label="Save as a draft...", command=self.action_save_draft)
+        file_menu.add_command(label="Open a draft...", command=self.action_open_draft)
         file_menu.add_command(label="Quit", accelerator="Ctrl+Q", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
 
@@ -686,6 +778,7 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         edit_menu.add_cascade(label="Generators", menu=generator_menu)
         edit_menu.add_separator()
         edit_menu.add_command(label="Pick accent colour...", command=self.action_pick_accent)
+        edit_menu.add_command(label="Import colours from a list...", command=self.action_import_colors)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
@@ -845,6 +938,25 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
 
     def _build_preview(self, parent: Any) -> None:
         """The mock app window. Plain tk widgets everywhere except the table."""
+        controls = tk.Frame(parent, background=EDITOR_COLORS["bg"])
+        controls.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(
+            controls, text="Vision:", background=EDITOR_COLORS["bg"],
+            foreground=EDITOR_COLORS["muted"],
+        ).pack(side="left")
+        self.vision_var = tk.StringVar(value="normal")
+        vision = ttk.Combobox(
+            controls, textvariable=self.vision_var, values=list(VISION_MODES),
+            state="readonly", width=14,
+        )
+        vision.pack(side="left", padx=(6, 0))
+        vision.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
+        tk.Label(
+            controls,
+            text="  colour-blind simulation of the preview only - the pack keeps its colours",
+            background=EDITOR_COLORS["bg"], foreground=EDITOR_COLORS["muted"],
+        ).pack(side="left")
+
         window = tk.Frame(parent, background=EDITOR_COLORS["sunken"], highlightthickness=1,
                           highlightbackground=EDITOR_COLORS["border"])
         window.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1307,7 +1419,8 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         self._refresh_job = None
         self._style_overrides_into_pack()
         state = preview_state(self.pack)
-        self._paint_preview(state)
+        mode = self.vision_var.get() if hasattr(self, "vision_var") else "normal"
+        self._paint_preview(simulate_state(state, mode))
         result = review(self.pack, taken_ids=installed_ids())
         self._update_checks(result)
         self._update_json()
@@ -1763,6 +1876,66 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         rgb, value = colorchooser.askcolor(color=current, title=f"Pick {COLOR_LABELS.get(key, key)}")
         if value:
             self.set_color(key, value)
+
+    def drafts_dir(self) -> Path:
+        """``~/.ipm/themes/_drafts`` - work in progress, never loaded by the app."""
+        folder = T.user_theme_dir() / "_drafts"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def action_save_draft(self) -> None:
+        if self.test_mode:
+            return
+        name = simpledialog.askstring(
+            "Save a draft", "Name for this draft:", initialvalue=self.pack.get("name") or "My Theme", parent=self,
+        )
+        if not name:
+            return
+        slug = slugify(name) or "draft"
+        target = self.drafts_dir() / f"{slug}.ipmtheme.json"
+        try:
+            target.write_text(pack_json(self.pack), encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("Save a draft", str(exc), parent=self)
+            return
+        self.set_status(f"Draft saved: {target}")
+
+    def action_open_draft(self) -> None:
+        if self.test_mode:
+            return
+        folder = self.drafts_dir()
+        drafts = sorted(folder.glob("*.ipmtheme.json"))
+        if not drafts:
+            messagebox.showinfo("Open a draft", f"No drafts yet.\n\nThey are saved in {folder}", parent=self)
+            return
+        path = filedialog.askopenfilename(
+            title="Open a draft", initialdir=str(folder),
+            filetypes=[("Theme packs", "*.ipmtheme.json"), ("All files", "*.*")], parent=self,
+        )
+        if not path:
+            return
+        self.open_path(Path(path))
+
+    def action_import_colors(self) -> None:
+        if self.test_mode:
+            return
+        text = simpledialog.askstring(
+            "Import colours",
+            "Paste hex colours (a Coolors link, or a list like #1e1e2e #cdd6f4 #89b4fa):",
+            parent=self,
+        )
+        if not text:
+            return
+        try:
+            colors = palette_from_hex_list(text, preview_colors(self.pack))
+        except T.ThemeError as exc:
+            messagebox.showwarning("Import colours", str(exc), parent=self)
+            return
+        self.push_undo()
+        self.pack["colors"] = colors
+        self._sync_vars()
+        self.refresh()
+        self.set_status("Palette built from the pasted colours")
 
     def action_pick_accent(self) -> None:
         if self.test_mode:
