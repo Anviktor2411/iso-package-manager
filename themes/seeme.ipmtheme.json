@@ -1,0 +1,24 @@
+{
+  "$schema": "../theme-pack.schema.json",
+  "schema_version": 1,
+  "id": "seeme",
+  "name": "SEEME",
+  "author": "Viki",
+  "version": "1.0.0",
+  "description": "TEST1",
+  "license": "MIT",
+  "base": "modern-dark",
+  "colors": {
+    "bg": "#1b101e",
+    "panel": "#291a2e",
+    "text": "#e8e0eb",
+    "muted": "#b4a2b9",
+    "accent": "#60dd3c",
+    "accent_active": "#48c723",
+    "danger": "#da2f2f",
+    "danger_active": "#ba2121",
+    "border": "#3e2d43",
+    "selection": "#3b8f24",
+    "accent_text": "#111418"
+  }
+}
