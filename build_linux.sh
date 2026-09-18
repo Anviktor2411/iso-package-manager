@@ -101,15 +101,70 @@ cmd_build() {
     EXTRA+=(--collect-data certifi)
   fi
 
+  # Ship the theme packs inside the binary, exactly like the .pyz does.
+  if [[ -d themes ]]; then
+    # Absolute: the spec is written into build/, and a relative source path
+    # would be looked up next to the spec instead of next to this script.
+    EXTRA+=(--add-data "$PWD/themes:themes")
+    log "bundling $(ls themes/*.ipmtheme.json 2>/dev/null | wc -l) theme pack(s)"
+  else
+    warn "no themes/ folder - the binary will ship without theme packs"
+  fi
+
+  local COMMON=(
+    --onefile --console
+    --name "$BIN_NAME"
+    --hidden-import main --hidden-import ipm_cli --hidden-import ipm_ia
+    --hidden-import ipm_search --hidden-import ipm_windows --hidden-import ipm_winops
+    --hidden-import ipm_http --hidden-import ipm_models --hidden-import ipm_utils
+    --hidden-import ipm_themes --hidden-import ipm_shop
+  )
+
   log "building the native one-file binary (this takes a minute) ..."
-  "$PY" -m PyInstaller --noconfirm --clean --onefile --console \
-    --name "$BIN_NAME" \
-    --distpath dist --workpath build --specpath build \
-    --hidden-import main --hidden-import ipm_cli --hidden-import ipm_ia \
-    --hidden-import ipm_search --hidden-import ipm_windows --hidden-import ipm_winops \
-      --hidden-import ipm_http --hidden-import ipm_models --hidden-import ipm_utils --hidden-import ipm_themes --hidden-import ipm_shop \
-    "${EXTRA[@]+"${EXTRA[@]}"}" "$ENTRY" \
-    || die "build failed - scroll up for the PyInstaller error"
+
+  # Two passes on purpose: the spec is generated first so the font libraries can
+  # be dropped from it. Bundling our own libfontconfig/libfreetype means a newer
+  # host - whose /etc/fonts config uses syntax our copy predates - greets the
+  # user with a screenful of "invalid constant used" before the window opens.
+  # Those libraries belong to the system; every desktop that can run Tk has them.
+  local SPEC="build/$BIN_NAME.spec"
+  if "$PY" -m PyInstaller.utils.cliutils.makespec --help >/dev/null 2>&1; then
+    "$PY" -m PyInstaller.utils.cliutils.makespec \
+      "${COMMON[@]}" --specpath build \
+      "${EXTRA[@]+"${EXTRA[@]}"}" "$ENTRY" \
+      || die "could not generate the build spec"
+
+    "$PY" - "$SPEC" <<'PATCH_SPEC' || die "could not patch the build spec"
+import sys
+from pathlib import Path
+
+spec = Path(sys.argv[1])
+text = spec.read_text(encoding="utf-8")
+marker = "pyz = PYZ("
+filter_code = (
+    "import os as _os\n"
+    "_SYSTEM_LIBS = ('libfontconfig', 'libfreetype')\n"
+    "a.binaries = [b for b in a.binaries\n"
+    "              if not _os.path.basename(b[1]).startswith(_SYSTEM_LIBS)]\n\n"
+)
+if marker not in text:
+    raise SystemExit("unexpected spec layout: no PYZ() call found")
+if "_SYSTEM_LIBS" not in text:
+    text = text.replace(marker, filter_code + marker, 1)
+    spec.write_text(text, encoding="utf-8")
+PATCH_SPEC
+
+    "$PY" -m PyInstaller --noconfirm --clean \
+      --distpath dist --workpath build "$SPEC" \
+      || die "build failed - scroll up for the PyInstaller error"
+  else
+    warn "PyInstaller makespec is unavailable - building without the font-library fix"
+    "$PY" -m PyInstaller --noconfirm --clean \
+      "${COMMON[@]}" \
+      --distpath dist --workpath build --specpath build \
+      "${EXTRA[@]+"${EXTRA[@]}"}" "$ENTRY" \
+      || die "build failed - scroll up for the PyInstaller error"
+  fi
 
   [[ -f "dist/$BIN_NAME" ]] || die "PyInstaller reported success but dist/$BIN_NAME is missing"
   chmod +x "dist/$BIN_NAME"
@@ -120,6 +175,17 @@ cmd_build() {
     log "smoke test: $vout"
   else
     die "dist/$BIN_NAME built but refuses to run - check missing system libraries"
+  fi
+
+  # The packs shipped silently missing once already: check, do not assume.
+  if [[ -d themes ]]; then
+    local packs
+    packs="$("dist/$BIN_NAME" --cli themes 2>/dev/null | sed -n 's/.*, \([0-9]\+\) theme pack.*/\1/p' | head -n 1)"
+    if [[ "${packs:-0}" -gt 0 ]]; then
+      log "smoke test: $packs theme pack(s) inside the binary"
+    else
+      die "the binary reports no theme packs - the themes folder was not bundled"
+    fi
   fi
 
   log "done: dist/$BIN_NAME ($(du -h "dist/$BIN_NAME" | cut -f1))"
