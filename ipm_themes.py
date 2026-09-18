@@ -1060,12 +1060,37 @@ def validate_pack(data: Any, filename: str = "<pack>") -> tuple[list[str], list[
     return errors, warnings
 
 
+# An optional colour follows the colour it is derived from. This matters when a
+# pack overrides the parent but leaves the optional one out: inheriting it from
+# the base instead would, for example, give a dark pack built on a light base a
+# white table background with its own light text on top of it.
+_DERIVED_FROM = {
+    "tree_bg": "panel",
+    "tab_bg": "panel",
+    "tree_heading_bg": "bg",
+    "tab_selected_bg": "bg",
+    "tree_heading_fg": "text",
+}
+
+
 def _resolve_colors(base: str, overrides: Mapping[str, Any]) -> dict[str, str]:
     """Merge a pack's colours over its base palette with sensible fallbacks."""
     resolved = {k: v for k, v in BUILTIN_PALETTES[base].items()}
+    given: set[str] = set()
     for key, value in overrides.items():
         if key in COLOR_KEYS and isinstance(value, str) and is_color(value):
             resolved[key] = value.strip()
+            given.add(key)
+
+    # Only keep a base colour the pack did not implicitly replace.
+    for key, parent in _DERIVED_FROM.items():
+        if key not in given and parent in given:
+            resolved[key] = resolved[parent]
+    if "accent_text" not in given and "accent" in given:
+        resolved["accent_text"] = best_text_on(resolved["accent"])
+    if "selection_fg" not in given and "selection" in given:
+        resolved["selection_fg"] = best_text_on(resolved["selection"])
+
     resolved.setdefault("accent_text", "#ffffff")
     resolved.setdefault("selection_fg", "#ffffff")
     resolved.setdefault("tree_heading_fg", resolved.get("text", "#000000"))
