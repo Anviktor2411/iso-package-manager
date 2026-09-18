@@ -184,6 +184,23 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
 .mock .tr.sel, .mock .tr.sel .u { color: var(--t-sel-fg); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
+/* ---- editor additions ---- */
+.prevbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; background: none; border: 0; color: var(--muted); padding: 6px 12px; cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--accent); color: #fff; }
+.prevbar label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.prevbar select { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.wcag { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 0 0 12px; }
+.wcag th, .wcag td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.wcag th { color: var(--muted); font-weight: 600; }
+.wcag td.n { font-variant-numeric: tabular-nums; text-align: right; }
+.wcag .pass { color: var(--ok); } .wcag .fail { color: var(--bad); }
+.wcag button { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+.compare { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; margin-top: 10px; }
+.compare figcaption { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+@media (max-width: 700px) { .compare { grid-template-columns: 1fr; } }
+
 /* ---- shop additions ---- */
 .tabsbar { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 0 0 14px; overflow-x: auto; }
 .tabsbar button { font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 12px; cursor: pointer; white-space: nowrap; }
@@ -296,10 +313,29 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
           <button role="tab" aria-selected="false" data-tab="tStyle">Font &amp; style</button>
         </div>
 
-        <div class="btnrow" style="margin-bottom:14px">
+        <div class="btnrow" style="margin-bottom:10px">
           <button class="btn" id="randomBtn">🎲 Random palette</button>
           <button class="btn" id="fixBtn">Make it readable</button>
           <button class="btn" id="resetBase">Reset colours to base</button>
+        </div>
+        <div class="btnrow" style="margin-bottom:10px">
+          <button class="btn" id="undoBtn" title="Ctrl+Z">↶ Undo</button>
+          <button class="btn" id="redoBtn" title="Ctrl+Y">↷ Redo</button>
+          <select id="harmonySel" aria-label="Build a palette from the accent colour">
+            <option value="">Harmony from accent…</option>
+            <option value="comp">Complementary</option>
+            <option value="triad">Triad</option>
+            <option value="analog">Analogous</option>
+            <option value="mono">Monochrome</option>
+          </select>
+          <button class="btn" id="variantBtn">Flip light / dark</button>
+          <button class="btn" id="pasteColors">Paste colours…</button>
+        </div>
+        <div class="btnrow" style="margin-bottom:14px">
+          <button class="btn" id="saveDraft">Save draft</button>
+          <select id="draftSel" aria-label="Saved drafts"><option value="">Drafts…</option></select>
+          <button class="btn" id="delDraft">Delete draft</button>
+          <button class="btn" id="shareBtn">Copy share link</button>
         </div>
         <div class="tabpanel" id="tBasics">
           <div class="fields">
@@ -354,8 +390,29 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       </div>
 
       <div class="sticky">
+        <div class="prevbar">
+          <div class="seg" id="viewSeg" role="tablist" aria-label="Preview tab">
+            <button type="button" role="tab" data-view="local" aria-selected="false">Local</button>
+            <button type="button" role="tab" data-view="internet" aria-selected="true">Internet</button>
+            <button type="button" role="tab" data-view="settings" aria-selected="false">Settings</button>
+          </div>
+          <label>Vision
+            <select id="cbSim">
+              <option value="none">normal</option>
+              <option value="prot">protanopia</option>
+              <option value="deut">deuteranopia</option>
+              <option value="trit">tritanopia</option>
+              <option value="gray">greyscale</option>
+            </select>
+          </label>
+          <label>Compare
+            <select id="compareSel"><option value="">off</option></select>
+          </label>
+        </div>
         <div class="mock big" id="bigMock" aria-label="Live preview of the app"></div>
+        <div id="compareBox" hidden></div>
         <div class="panel">
+          <table class="wcag" id="wcag" hidden><thead><tr><th>Pair</th><th class="n">Ratio</th><th>AA</th><th>AAA</th><th></th></tr></thead><tbody></tbody></table>
           <div class="checks" id="checks"></div>
           <div class="btnrow">
             <button class="btn primary" id="toUpload">Upload this theme</button>
@@ -535,9 +592,51 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     return ordered;
   }
 
+  // ================= colour maths =================
+  function rgbOf(hex) { const v = expand(hex).slice(1); return [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16)); }
+  function hexOf(rgb) { return "#" + rgb.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join(""); }
+  function toHsl(hex) {
+    const [r, g, b] = rgbOf(hex).map(v => v / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d) {
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+    }
+    const l = (max + min) / 2;
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+    return [h, s, l];
+  }
+  function fromHsl(h, s, l) {
+    h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+    const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+    const seg = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(h / 60) % 6];
+    return hexOf(seg.map(v => (v + m) * 255));
+  }
+  const shift = (hex, dh, ds = 0, dl = 0) => { const [h, s, l] = toHsl(hex); return fromHsl(h + dh, s + ds, l + dl); };
+  const mixHex = (a, b, amt) => { const x = rgbOf(a), y = rgbOf(b); return hexOf(x.map((v, i) => v + (y[i] - v) * amt)); };
+
+  // Colour-vision simulation (Brettel/Viénot style matrices, close enough for a preview).
+  const CB_MATRIX = {
+    prot: [[0.567, 0.433, 0], [0.558, 0.442, 0], [0, 0.242, 0.758]],
+    deut: [[0.625, 0.375, 0], [0.7, 0.3, 0], [0, 0.3, 0.7]],
+    trit: [[0.95, 0.05, 0], [0, 0.433, 0.567], [0, 0.475, 0.525]],
+  };
+  function simulate(hex, mode) {
+    if (!mode || mode === "none" || !HEX_RE.test(String(hex))) return hex;
+    const rgb = rgbOf(hex);
+    if (mode === "gray") { const y = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]; return hexOf([y, y, y]); }
+    const m = CB_MATRIX[mode];
+    if (!m) return hex;
+    return hexOf(m.map(row => row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2]));
+  }
+
   // ================= mock app =================
-  function mockVars(p) {
-    const r = resolve(p), c = r.colors;
+  function mockVars(p, sim) {
+    const r = resolve(p), c0 = r.colors;
+    const c = sim && sim !== "none" ? Object.fromEntries(Object.entries(c0).map(([k, v]) => [k, simulate(v, sim)])) : c0;
     const relief = v => v === "raised" ? "inset 0 1px 0 rgba(255,255,255,.35), inset 0 -1px 0 rgba(0,0,0,.25)" : v === "sunken" ? "inset 0 1px 2px rgba(0,0,0,.35)" : "none";
     return [
       `--t-font:"${String(r.font).replace(/["\\<>]/g, "")}",system-ui,sans-serif`,
@@ -553,9 +652,16 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     ].join(";").replace(/'/g, "");
   }
   const ICON = p => resolve(p).style.use_icons ? "⬇ " : "";
-  const MOCK = (p, rows) => `
-    <div class="bar"><span>Theme</span><span>Language</span></div>
-    <div class="tabs"><div class="tab">Local</div><div class="tab on">Internet</div><div class="tab">Settings</div></div>
+  const tabsRow = on => ["Local", "Internet", "Settings"]
+    .map(name => `<div class="tab${name.toLowerCase() === on ? " on" : ""}">${name}</div>`).join("");
+  const tableOf = rows => `
+        <div class="table">
+          <div class="th"><span>Name</span><span>Size</span></div>
+          ${rows.map((r, i) => `<div class="tr${i === 1 ? " sel" : ""}"><span>${r[0]}</span><span class="u">${r[1]}</span></div>`).join("")}
+        </div>`;
+
+  const VIEWS = {
+    internet: (p, rows) => `
     <div class="body">
       <div class="side">
         <div class="lbl">Category</div><div class="field"></div>
@@ -563,13 +669,39 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
         <div class="b acc">${ICON(p)}Refresh List</div><div class="b plain">Open Source Page</div><div class="b dis">Eject ISO</div><div class="b dan">Stop</div>
       </div>
       <div>
-        <div class="table">
-          <div class="th"><span>Name</span><span>Size</span></div>
-          ${rows.map((r, i) => `<div class="tr${i === 1 ? " sel" : ""}"><span>${r[0]}</span><span class="u">${r[1]}</span></div>`).join("")}
-        </div>
-        <div class="foot"><div class="b acc">${ICON(p)}Download</div><div class="b plain">Copy URL</div><div class="b plain">Validate</div></div>
+        ${tableOf(rows)}
+        <div class="foot"><div class="b acc">${ICON(p)}Download</div><div class="b plain">Copy URL</div><div class="b dis">Validate</div></div>
       </div>
-    </div>`;
+    </div>`,
+    local: (p, rows) => `
+    <div class="body">
+      <div class="side">
+        <div class="lbl">Folders</div><div class="field" style="height:54px"></div>
+        <div class="b plain">Add Folder</div><div class="b plain">Remove Selected</div>
+        <div class="b acc">${ICON(p)}Scan</div><div class="b dan">Stop</div>
+      </div>
+      <div>
+        ${tableOf(rows.map(r => [r[0], r[1]]))}
+        <div class="foot"><div class="b plain">Mount + Open</div><div class="b plain">Show Details</div><div class="b dis">Extract</div></div>
+      </div>
+    </div>`,
+    settings: (p) => `
+    <div class="body" style="grid-template-columns:1fr">
+      <div class="side">
+        <div class="lbl">Theme</div><div class="field focus"></div>
+        <div class="lbl">Language</div><div class="field"></div>
+        <div class="lbl">Startup tab</div><div class="field"></div>
+        <div class="lbl">Downloads folder</div><div class="field"></div>
+        <div class="foot"><div class="b acc">${ICON(p)}Save Settings</div><div class="b plain">Reset</div><div class="b dis">Clear cache</div></div>
+      </div>
+    </div>`,
+  };
+
+  let previewView = "internet";
+  const MOCK = (p, rows, view) => `
+    <div class="bar"><span>Theme</span><span>Language</span></div>
+    <div class="tabs">${tabsRow(view || "internet")}</div>
+    ${(VIEWS[view || "internet"] || VIEWS.internet)(p, rows)}`;
   const ROWS_S = [["ubuntu-24.04-desktop.iso", "5.8 GB"], ["debian-13-netinst.iso", "754 MB"], ["Fedora-Live-44.iso", "2.3 GB"]];
   const ROWS_L = ROWS_S.concat([["alpine-standard-3.22.iso", "221 MB"], ["FreeBSD-14.3-disc1.iso", "1.1 GB"], ["slackware64-15.0-dvd.iso", "3.6 GB"]]);
 
@@ -598,6 +730,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
         } catch (err) { return null; }
       }));
       shop = got.filter(Boolean);
+      fillCompareOptions();
       if (!shop.length) throw new Error("empty");
       $("galleryStatus").textContent = `${shop.length} themes from the GitHub repository.`;
     } catch (e) {
@@ -630,7 +763,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     $("grid").innerHTML = list.map(item => {
       const {pack, entry} = item, i = shop.indexOf(item), c = resolve(pack).colors, shot = shotUrl(entry);
       const visual = shot ? `<img class="thumb" src="${shot}" alt="Screenshot of ${esc(pack.name)}" loading="lazy">`
-                          : `<div class="mock" style='${mockVars(pack)}'>${MOCK(pack, ROWS_S)}</div>`;
+                          : `<div class="mock" style='${mockVars(pack)}'>${MOCK(pack, ROWS_S, "internet")}</div>`;
       const sw = ["bg", "panel", "accent", "selection", "danger", "text"].map(k => `<i style="background:${c[k]}"></i>`).join("");
       return `<article class="card">
         <button class="open" data-act="details" data-i="${i}" aria-label="Details for ${esc(pack.name)}">${visual}</button>
@@ -665,7 +798,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       ${pack.description ? `<p style="margin:0">${esc(pack.description)}</p>` : ""}
       <div class="chips"><span class="chip">base: ${esc(pack.base)}</span>${pack.version ? `<span class="chip">v${esc(pack.version)}</span>` : ""}<span class="chip">${esc(pack.license || "no license")}</span><span class="chip">font: ${esc(r.font)}</span></div>
       ${shot ? `<div class="shots"><img class="main" src="${shot}" alt="Screenshot of ${esc(pack.name)}"></div>` : ""}
-      <div class="mock big" style='${mockVars(pack)}'>${MOCK(pack, ROWS_L)}</div>
+      <div class="mock big" style='${mockVars(pack)}'>${MOCK(pack, ROWS_L, "internet")}</div>
       <div class="palette">${[...REQUIRED, ...OPTIONAL].map(k => `<div><i style="background:${r.colors[k]}"></i><span>${k}<br><code>${esc(r.colors[k])}</code></span></div>`).join("")}</div>
       <div class="btnrow">
         <button class="btn primary" id="dZip">Download .zip</button>
@@ -790,9 +923,9 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     $("fLicense").addEventListener("change", () => { cur.license = $("fLicense").value; syncEditor(); });
     $("fBase").addEventListener("change", () => { cur.base = $("fBase").value; syncEditor(); });
 
-    $("resetBase").addEventListener("click", () => { cur.colors = Object.fromEntries(REQUIRED.map(k => [k, BASES[cur.base].colors[k]])); syncEditor(); toast("Colours reset to base"); });
-    $("randomBtn").addEventListener("click", () => { randomPalette(); syncEditor(); });
-    $("fixBtn").addEventListener("click", () => { makeReadable(); syncEditor(); toast("Text colours adjusted"); });
+    $("resetBase").addEventListener("click", () => { cur.colors = Object.fromEntries(REQUIRED.map(k => [k, BASES[cur.base].colors[k]])); syncEditor(); pushHistory(); toast("Colours reset to base"); });
+    $("randomBtn").addEventListener("click", () => { randomPalette(); syncEditor(); pushHistory(); });
+    $("fixBtn").addEventListener("click", () => { makeReadable(); syncEditor(); pushHistory(); toast("Text colours adjusted"); });
   }
 
   function hsl(h, s, l) {
@@ -840,6 +973,12 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
     syncEditor();
   }
 
+  let historyTimer = null;
+  function noteChange() {
+    clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => pushHistory(), 450);
+  }
+
   function syncEditor(skip) {
     const r = resolve(cur);
     for (const k of [...REQUIRED, ...OPTIONAL]) {
@@ -848,9 +987,12 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       if (t !== skip) t.value = cur.colors[k] ?? val;
       if (p !== skip && HEX_RE.test(val)) p.value = expand(val);
     }
+    const sim = $("cbSim") ? $("cbSim").value : "none";
     const m = $("bigMock");
-    m.setAttribute("style", mockVars(cur));
-    m.innerHTML = MOCK(cur, ROWS_L);
+    m.setAttribute("style", mockVars(cur, sim));
+    m.innerHTML = MOCK(cur, ROWS_L, previewView);
+    renderCompare();
+    renderWcag(r.colors);
     $("jsonOut").textContent = packText(cur);
 
     const {errors, warnings} = validatePack(cur);
@@ -870,8 +1012,270 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       rows.push(["warn", "Upload is blocked until these are fixed – the bot checks packs with --strict. The \u201cMake it readable\u201d button fixes contrast automatically."]);
     }
     $("checks").innerHTML = rows.map(([cls, msg]) => `<div class="${cls}">${esc(msg)}</div>`).join("");
+    noteChange();
     for (const id of ["downloadBtn", "zipBtn"]) $(id).disabled = errors.length > 0;
     $("toUpload").disabled = errors.length > 0 || blocking.length > 0;
+  }
+
+  // ---------- WCAG table ----------
+  const WCAG_PAIRS = [
+    ["text", "bg", 4.5, "Main text on background"],
+    ["text", "panel", 4.5, "Text on panels"],
+    ["text", "tree_bg", 4.5, "Text in the list"],
+    ["tree_heading_fg", "tree_heading_bg", 4.5, "Table header"],
+    ["muted", "bg", 3, "Secondary text"],
+    ["accent_text", "accent", 3, "Primary button label"],
+    ["selection_fg", "selection", 3, "Selected row text"],
+  ];
+
+  function fixPair(fg, bg, min) {
+    const c = resolve(cur).colors;
+    const back = c[bg];
+    if (!HEX_RE.test(expand(back || ""))) return;
+    const dark = lum(expand(back)) < 0.35;
+    let best = dark ? "#ffffff" : "#111418", bestRatio = ratio(best, back) || 0;
+    // walk the lightness of the current foreground first: keep the hue when we can
+    const [h, s] = toHsl(c[fg] || best);
+    for (let i = 0; i <= 20; i++) {
+      const l = dark ? 1 - i / 22 : i / 22;
+      const candidate = fromHsl(h, s, l);
+      const r = ratio(candidate, back) || 0;
+      if (r >= min + 0.2) { best = candidate; bestRatio = r; break; }
+      if (r > bestRatio) { best = candidate; bestRatio = r; }
+    }
+    cur.colors[fg] = best;
+    pushHistory();
+    syncEditor();
+    toast(`${fg} fixed to ${best} (${bestRatio.toFixed(1)}:1)`);
+  }
+
+  function renderWcag(c) {
+    const table = $("wcag"); if (!table) return;
+    const rows = WCAG_PAIRS.map(([fg, bg, min, label]) => {
+      const r = ratio(c[fg], c[bg]);
+      if (r == null) return "";
+      const aa = r >= min, aaa = r >= (min >= 4.5 ? 7 : 4.5);
+      const fix = aa ? "" : `<button type="button" data-fix="${fg}|${bg}|${min}">Fix</button>`;
+      return `<tr><td>${esc(label)}</td><td class="n">${r.toFixed(2)}</td>
+        <td class="${aa ? "pass" : "fail"}">${aa ? "pass" : "fail"}</td>
+        <td class="${aaa ? "pass" : "fail"}">${aaa ? "pass" : "–"}</td><td>${fix}</td></tr>`;
+    }).join("");
+    table.tBodies[0].innerHTML = rows;
+    table.hidden = !rows;
+  }
+
+  $("wcag").addEventListener("click", e => {
+    const button = e.target.closest("button[data-fix]");
+    if (!button) return;
+    const [fg, bg, min] = button.dataset.fix.split("|");
+    fixPair(fg, bg, Number(min));
+  });
+
+  // ---------- preview controls ----------
+  $("viewSeg").addEventListener("click", e => {
+    const button = e.target.closest("button[data-view]");
+    if (!button) return;
+    previewView = button.dataset.view;
+    [...$("viewSeg").children].forEach(b => b.setAttribute("aria-selected", String(b === button)));
+    syncEditor();
+  });
+  $("cbSim").addEventListener("change", () => syncEditor());
+
+  function renderCompare() {
+    const box = $("compareBox"), sel = $("compareSel");
+    if (!box || !sel) return;
+    const other = shop.find(s => s.pack.id === sel.value);
+    if (!other) { box.hidden = true; box.innerHTML = ""; return; }
+    const sim = $("cbSim").value;
+    box.hidden = false;
+    box.className = "compare";
+    box.innerHTML = [[cur, "Your theme"], [other.pack, other.pack.name]].map(([pack, label]) => `
+      <figure style="margin:0">
+        <div class="mock" style='${mockVars(pack, sim)}'>${MOCK(pack, ROWS_S, previewView)}</div>
+        <figcaption>${esc(label)}</figcaption>
+      </figure>`).join("");
+  }
+  $("compareSel").addEventListener("change", () => renderCompare());
+
+  function fillCompareOptions() {
+    const sel = $("compareSel"); if (!sel) return;
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">off</option>` + shop
+      .map(s => `<option value="${esc(s.pack.id)}">${esc(s.pack.name)}</option>`).join("");
+    sel.value = keep;
+  }
+
+  // ---------- undo / redo ----------
+  let history = [], historyAt = -1, historyHold = false;
+  function pushHistory() {
+    if (historyHold) return;
+    const snapshot = packText(cur);
+    if (history[historyAt] === snapshot) return;
+    history = history.slice(0, historyAt + 1);
+    history.push(snapshot);
+    if (history.length > 60) history.shift();
+    historyAt = history.length - 1;
+    updateHistoryButtons();
+  }
+  function updateHistoryButtons() {
+    $("undoBtn").disabled = historyAt <= 0;
+    $("redoBtn").disabled = historyAt >= history.length - 1;
+  }
+  function stepHistory(delta) {
+    const next = historyAt + delta;
+    if (next < 0 || next >= history.length) return;
+    historyAt = next;
+    historyHold = true;
+    try { loadEditor(JSON.parse(history[historyAt])); } catch (e) {}
+    historyHold = false;
+    updateHistoryButtons();
+  }
+  $("undoBtn").addEventListener("click", () => stepHistory(-1));
+  $("redoBtn").addEventListener("click", () => stepHistory(1));
+  addEventListener("keydown", e => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey) { e.preventDefault(); stepHistory(-1); }
+    else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); stepHistory(1); }
+  });
+
+  // ---------- palette tools ----------
+  function applyPalette(colors) {
+    Object.assign(cur.colors, colors);
+    pushHistory();
+    syncEditor();
+  }
+
+  $("harmonySel").addEventListener("change", e => {
+    const mode = e.target.value; e.target.value = "";
+    if (!mode) return;
+    const c = resolve(cur).colors, accent = expand(c.accent);
+    if (!HEX_RE.test(accent)) return toast("Set a hex accent colour first");
+    const dark = lum(expand(c.bg)) < 0.35;
+    const turn = {comp: 180, triad: 120, analog: 30, mono: 0}[mode];
+    const second = shift(accent, turn, mode === "mono" ? -0.1 : 0, mode === "mono" ? (dark ? 0.12 : -0.12) : 0);
+    const third = shift(accent, -turn, 0, 0);
+    applyPalette({
+      accent_active: shift(accent, 0, 0.02, dark ? -0.08 : -0.06),
+      selection: mixHex(second, c.bg, dark ? 0.25 : 0.1),
+      danger: mode === "mono" ? c.danger : shift(accent, turn === 180 ? 150 : -turn, 0.1, 0),
+      border: mixHex(c.panel, third, 0.25),
+      accent_text: (ratio("#ffffff", accent) || 0) >= 3 ? "#ffffff" : "#111418",
+      selection_fg: (ratio("#ffffff", mixHex(second, c.bg, dark ? 0.25 : 0.1)) || 0) >= 3 ? "#ffffff" : "#111418",
+    });
+    toast(`${mode} palette built from the accent`);
+  });
+
+  $("variantBtn").addEventListener("click", () => {
+    const c = resolve(cur).colors;
+    const flip = hex => { const [h, s, l] = toHsl(expand(hex)); return fromHsl(h, s, 1 - l); };
+    const next = {};
+    for (const k of [...REQUIRED, ...OPTIONAL]) {
+      const value = cur.colors[k] != null ? cur.colors[k] : c[k];
+      if (HEX_RE.test(expand(String(value)))) next[k] = flip(value);
+    }
+    cur.base = lum(expand(next.bg)) < 0.35 ? "modern-dark" : "default";
+    $("fBase").value = cur.base;
+    applyPalette(next);
+    toast("Flipped to the opposite lightness");
+  });
+
+  $("pasteColors").addEventListener("click", () => {
+    const input = prompt("Paste hex colours (a Coolors link or a list like #1e1e2e, #cdd6f4, #89b4fa):");
+    if (!input) return;
+    const hexes = [];
+    const source = input.includes("coolors.co") ? input.split("/").pop().split("-").map(h => "#" + h).join(" ") : input;
+    for (const match of source.match(/#?[0-9a-fA-F]{6}\b/g) || []) {
+      const hex = expand(match.startsWith("#") ? match : "#" + match);
+      if (HEX_RE.test(hex)) hexes.push(hex.toLowerCase());
+    }
+    if (hexes.length < 3) return toast("Need at least three hex colours");
+    const sorted = [...hexes].sort((a, b) => lum(a) - lum(b));
+    const darkest = sorted[0], lightest = sorted[sorted.length - 1];
+    const dark = lum(darkest) + lum(lightest) < 1;
+    const bg = dark ? darkest : lightest, text = dark ? lightest : darkest;
+    const middle = sorted.slice(1, -1);
+    const accent = middle.reduce((best, hex) => {
+      const [, s] = toHsl(hex);
+      return s > toHsl(best)[1] ? hex : best;
+    }, middle[0] || hexes[0]);
+    applyPalette({
+      bg, text, accent,
+      panel: mixHex(bg, text, 0.12),
+      muted: mixHex(text, bg, 0.35),
+      accent_active: shift(accent, 0, 0.02, dark ? -0.08 : -0.06),
+      border: mixHex(bg, text, 0.25),
+      selection: mixHex(accent, bg, 0.45),
+      danger: middle.find(h => { const [h2] = toHsl(h); return h2 < 25 || h2 > 330; }) || "#e05252",
+      accent_text: (ratio("#ffffff", accent) || 0) >= 3 ? "#ffffff" : "#111418",
+    });
+    cur.base = dark ? "modern-dark" : "default";
+    $("fBase").value = cur.base;
+    toast(`Imported ${hexes.length} colours`);
+  });
+
+  // ---------- drafts ----------
+  const DRAFT_KEY = "ipm-theme-drafts";
+  function readDrafts() {
+    try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}") || {}; } catch (e) { return {}; }
+  }
+  function writeDrafts(drafts) {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)); return true; } catch (e) { return false; }
+  }
+  function fillDrafts(selected) {
+    const drafts = readDrafts(), sel = $("draftSel");
+    sel.innerHTML = `<option value="">Drafts…</option>` + Object.keys(drafts).sort()
+      .map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join("");
+    if (selected) sel.value = selected;
+  }
+  $("saveDraft").addEventListener("click", () => {
+    const name = (prompt("Save this theme as a draft called:", cur.name || "My Theme") || "").trim();
+    if (!name) return;
+    const drafts = readDrafts();
+    drafts[name] = JSON.parse(packText(cur));
+    if (!writeDrafts(drafts)) return toast("This browser will not let the page store drafts");
+    fillDrafts(name);
+    toast(`Draft "${name}" saved in this browser`);
+  });
+  $("draftSel").addEventListener("change", e => {
+    const name = e.target.value; if (!name) return;
+    const pack = readDrafts()[name];
+    if (!pack) return;
+    loadEditor(pack);
+    pushHistory();
+    toast(`Opened draft "${name}"`);
+  });
+  $("delDraft").addEventListener("click", () => {
+    const name = $("draftSel").value;
+    if (!name) return toast("Pick a draft first");
+    const drafts = readDrafts();
+    delete drafts[name];
+    writeDrafts(drafts);
+    fillDrafts();
+    toast(`Draft "${name}" deleted`);
+  });
+
+  // ---------- share link ----------
+  const b64 = {
+    encode: text => btoa(unescape(encodeURIComponent(text))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+    decode: text => decodeURIComponent(escape(atob(text.replace(/-/g, "+").replace(/_/g, "/")))),
+  };
+  $("shareBtn").addEventListener("click", async () => {
+    const link = location.origin + location.pathname + "#theme=" + b64.encode(packText(cur));
+    if (link.length > 8000) return toast("This theme is too long for a link, use Download .json");
+    try { await navigator.clipboard.writeText(link); toast("Share link copied"); }
+    catch (e) { prompt("Copy this link:", link); }
+  });
+  function openSharedTheme() {
+    const match = /#theme=([A-Za-z0-9_-]+)/.exec(location.hash || "");
+    if (!match) return false;
+    try {
+      const pack = JSON.parse(b64.decode(match[1]));
+      loadEditor(pack);
+      toast(`Opened "${pack.name || "shared theme"}" from the link`);
+      location.hash = "#editor";
+      return true;
+    } catch (e) { return false; }
   }
 
   $("downloadBtn").addEventListener("click", () => downloadJson(cur));
@@ -929,7 +1333,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
       $("fixInEditor").onclick = () => loadEditor(p);
     } else {
       upPack = p;
-      $("upTheme").innerHTML = `<div class="picked"><div class="mock" style='${mockVars(p)}'>${MOCK(p, ROWS_S)}</div>
+      $("upTheme").innerHTML = `<div class="picked"><div class="mock" style='${mockVars(p)}'>${MOCK(p, ROWS_S, "internet")}</div>
         <div><b>${esc(p.name)}</b><br><span class="note">${esc(p.id)} · base ${esc(p.base)}${p.version ? " · v" + esc(p.version) : ""}</span></div></div>
         ${warnings.length ? `<p class="note warn">${warnings.length} warning(s): the bot runs --strict, so fix these first.</p><ul class="list">${warnings.slice(0, 4).map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
     }
@@ -991,6 +1395,11 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
   renderEditorShot();
   shop = FALLBACK.map(pack => ({pack, entry: {file: pack.id + ".ipmtheme.json"}}));
   renderStats(); renderShop();
+  fillDrafts();
+  fillCompareOptions();
+  openSharedTheme();
+  pushHistory();
+  updateHistoryButtons();
   loadShop();
 })();
 </script>
