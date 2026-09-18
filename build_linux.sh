@@ -97,8 +97,19 @@ cmd_build() {
   else
     warn "pywebview not installed - the in-app browser falls back to the default browser"
   fi
+  # Without a CA bundle inside the binary, HTTPS depends on wherever the
+  # bundled OpenSSL was told to look on the build machine - which is why the
+  # Theme Shop could fail with a bare "no connection" on another distro.
+  if ! "$PY" -c 'import certifi' >/dev/null 2>&1; then
+    log "certifi missing - installing it so the binary carries a CA bundle"
+    "$PY" -m pip install --user --disable-pip-version-check --quiet certifi \
+      || "$PY" -m pip install --user --disable-pip-version-check --quiet \
+           --break-system-packages certifi \
+      || warn "could not install certifi - HTTPS will rely on the target system's CA store"
+  fi
   if "$PY" -c 'import certifi' >/dev/null 2>&1; then
     EXTRA+=(--collect-data certifi)
+    log "bundling the certifi CA bundle"
   fi
 
   # Ship the theme packs inside the binary, exactly like the .pyz does.

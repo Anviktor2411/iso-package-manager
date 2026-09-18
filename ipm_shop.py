@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import urllib.error
@@ -31,6 +32,13 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import ipm_themes as T  # noqa: E402
+
+try:  # the same TLS setup the downloader uses (certifi when it is available)
+    from ipm_utils import ssl_context_for_https as _ssl_context  # noqa: E402
+except Exception:  # pragma: no cover - ipm_utils is always there in the app
+
+    def _ssl_context():
+        return None
 
 REPO = os.environ.get("IPM_SHOP_REPO", "Anviktor2411/iso-package-manager")
 BRANCH = os.environ.get("IPM_SHOP_BRANCH", "main")
@@ -56,15 +64,37 @@ class ShopError(RuntimeError):
 # Network
 # ---------------------------------------------------------------------------
 
+def _why(exc: BaseException) -> str:
+    """A sentence the user can act on, instead of an exception class name."""
+    reason = getattr(exc, "reason", None) or exc
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return ("the TLS certificate could not be verified - the system "
+                "certificate store is missing or out of date")
+    if isinstance(reason, ssl.SSLError):
+        return f"TLS error: {reason}"
+    text = str(reason).strip()
+    if not text:
+        text = reason.__class__.__name__
+    if "Name or service not known" in text or "Temporary failure in name resolution" in text:
+        return "the host name could not be resolved - check DNS or your connection"
+    if "Connection refused" in text or "Network is unreachable" in text:
+        return f"{text} - a firewall or proxy may be blocking it"
+    if "timed out" in text.lower():
+        return "the connection timed out"
+    return text
+
+
 def _get(url: str, limit: int = MAX_BYTES, timeout: float = TIMEOUT) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    context = _ssl_context() if url.lower().startswith("https:") else None
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             data = response.read(limit + 1)
     except urllib.error.HTTPError as exc:
         raise ShopError(f"{url.rsplit('/', 1)[-1]}: HTTP {exc.code}") from exc
     except Exception as exc:  # URLError, socket timeout, TLS, ...
-        raise ShopError(f"no connection to GitHub ({exc.__class__.__name__})") from exc
+        host = url.split("/")[2] if "//" in url else url
+        raise ShopError(f"could not reach {host}: {_why(exc)}") from exc
     if len(data) > limit:
         raise ShopError("the download is larger than expected")
     return data
