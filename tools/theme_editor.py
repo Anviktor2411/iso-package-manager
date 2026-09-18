@@ -969,7 +969,7 @@ class ThemeEditor(_Base):  # type: ignore[misc,valid-type]
         for label in self.pv_menu_labels:
             label.pack(side="left")
 
-        self.pv_title = tk.Label(window, text=f"  {T.APP_NAME} V0.9   -   Local ISOs", anchor="w")
+        self.pv_title = tk.Label(window, text=f"  {T.APP_NAME} V{getattr(T, 'APP_VERSION', '0.10')}   -   Local ISOs", anchor="w")
         self.pv_title.pack(fill="x")
 
         self.pv_toolbar = tk.Frame(window)
